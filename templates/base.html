@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}머신러닝 중간고사 연습{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{{ url_for('quiz.home') }}">ML MIDTERM</a>
+    <nav><a href="{{ url_for('quiz.question_form') }}">문제 작성 양식</a></nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <footer>이미지 교재를 직접 복제하지 않은 자체 연습 문제입니다.</footer>
+</body>
+</html>

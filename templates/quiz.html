@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ category_name }} | 머신러닝 중간고사 연습{% endblock %}
+{% block content %}
+<section class="quiz-intro">
+  <a class="back" href="{{ url_for('quiz.home') }}">← 분야 선택으로</a>
+  <p class="eyebrow">{{ category_name }}</p>
+  <h1>{{ questions|length }}문제 풀이</h1>
+  <p>각 문제의 답을 고른 뒤 채점하기를 눌러 해설을 확인하세요.</p>
+</section>
+<form action="{{ url_for('quiz.show_result') }}" method="post" class="quiz-form">
+  <input type="hidden" name="category" value="{{ category }}">
+  {% for question in questions %}
+  <fieldset class="question-card">
+    <legend><span>{{ loop.index }}</span>{{ question.prompt }}</legend>
+    <div class="choices">
+      {% for choice in question.choices %}
+      <label><input type="radio" name="answer_{{ question.identifier }}" value="{{ loop.index0 }}"> <b>{{ '①②③④⑤'[loop.index0] }}</b> {{ choice }}</label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% endfor %}
+  <button class="button primary" type="submit">채점하고 해설 보기</button>
+</form>
+{% endblock %}

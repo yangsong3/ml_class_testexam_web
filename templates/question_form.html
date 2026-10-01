@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}문제 작성 양식 | 머신러닝 중간고사 연습{% endblock %}
+{% block content %}
+<section class="quiz-intro">
+  <a class="back" href="{{ url_for('quiz.home') }}">← 홈으로</a>
+  <p class="eyebrow">문제은행 확장</p>
+  <h1>문제 데이터 작성 양식</h1>
+  <p>입력한 내용은 이 브라우저에서 JSON 파일로 내려받습니다. 내려받은 항목을 <code>data/questions.json</code> 배열에 추가하세요.</p>
+</section>
+<form id="question-builder" class="builder-form">
+  <label>문제 ID<input name="id" required placeholder="numpy-004"></label>
+  <label>분야<select name="category" required><option value="basics">머신러닝 기초</option><option value="features">데이터와 피처</option><option value="numpy">NumPy</option><option value="pandas">pandas</option><option value="visualization">데이터 시각화</option></select></label>
+  <label>문제 내용<textarea name="prompt" required></textarea></label>
+  <label>선택지 1<input name="choice" required></label>
+  <label>선택지 2<input name="choice" required></label>
+  <label>선택지 3<input name="choice" required></label>
+  <label>선택지 4<input name="choice" required></label>
+  <label>정답 번호<select name="answer" required><option value="0">1번</option><option value="1">2번</option><option value="2">3번</option><option value="3">4번</option></select></label>
+  <label>해설<textarea name="explanation" required></textarea></label>
+  <button class="button primary" type="submit">JSON 내려받기</button>
+</form>
+<script src="{{ url_for('static', filename='question_form.js') }}"></script>
+{% endblock %}

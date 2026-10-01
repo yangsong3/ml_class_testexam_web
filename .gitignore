@@ -1,0 +1,37 @@
+# Python 가상 환경
+.venv/
+venv/
+
+# Python 실행 산출물
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 테스트 및 분석 도구 산출물
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# 환경 변수와 로컬 설정
+.env
+.env.*
+!.env.example
+
+# 편집기 설정
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 운영체제 생성 파일
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 기타
+AGENTS.md
+
+data/
