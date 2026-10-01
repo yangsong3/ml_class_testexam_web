@@ -34,4 +34,4 @@ Desktop.ini
 # 기타
 AGENTS.md
 
-data/
+data/*.jpg
