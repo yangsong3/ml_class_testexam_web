@@ -18,12 +18,12 @@ from flask import (
 )
 
 from app.services.login_attempt_tracker import LoginAttemptTracker
-from app.services.category_repository import Category, CategoryRepository
+from app.services.category_repository import Category
+from app.services.database_repositories import CategoryRepository, QuestionRepository
 from app.services.question_repository import (
     MULTIPLE_CHOICE,
     SHORT_ANSWER,
     Question,
-    QuestionRepository,
 )
 
 admin = Blueprint("admin", __name__, url_prefix="/admin")

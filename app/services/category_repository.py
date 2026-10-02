@@ -12,8 +12,8 @@ class Category:
     name: str
 
 
-class CategoryRepository:
-    """JSON 파일에서 문제 분야를 읽고 추가한다."""
+class JsonCategoryRepository:
+    """이전 형식의 JSON 문제 분야를 읽는다."""
 
     def __init__(self, category_path: Path, seed_path: Path) -> None:
         self._category_path = category_path

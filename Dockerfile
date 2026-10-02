@@ -6,10 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+COPY alembic.ini ./
+COPY migrations ./migrations
 COPY app ./app
-COPY data/categories.json ./data/categories.json
 COPY data/categories.json ./seed/categories.json
-COPY data/questions.json ./data/questions.json
+COPY data/questions.json ./seed/questions.json
 COPY static ./static
 COPY templates ./templates
 COPY wsgi.py ./

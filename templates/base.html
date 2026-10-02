@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}머신러닝 중간고사 연습{% endblock %}</title>
+  <title>{% block title %}머신러닝/컴퓨터구조 중간고사 연습{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -12,6 +12,6 @@
     <nav><a href="{{ url_for('admin.dashboard') }}">문제 관리</a></nav>
   </header>
   <main>{% block content %}{% endblock %}</main>
-  <footer>이미지 교재를 직접 복제하지 않은 자체 연습 문제입니다.</footer>
+  <footer>연습 문제입니다.</footer>
 </body>
 </html>

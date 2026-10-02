@@ -2,7 +2,7 @@
 
 ## 1. 목적
 
-이 프로젝트는 머신러닝 수업의 중간고사 범위를 분야별로 복습하는 웹 애플리케이션이다. 사용자는 객관식 문제를 풀고 즉시 채점 결과와 해설을 확인할 수 있다. 비밀번호로 보호된 관리 화면에서는 문제를 추가, 수정, 삭제할 수 있다.
+이 프로젝트는 머신러닝 수업의 중간고사 범위를 분야별로 복습하는 웹 애플리케이션이다. 사용자는 객관식과 주관식 문제를 풀고 즉시 채점 결과와 해설을 확인할 수 있다. 비밀번호로 보호된 관리 화면에서는 문제를 추가, 수정, 삭제할 수 있다.
 
 현재 문제 범위는 다음과 같다.
 
@@ -19,36 +19,39 @@ flowchart LR
     U[사용자 브라우저] -->|HTTP 요청| G[Gunicorn]
     G --> F[Flask 애플리케이션]
     F --> R[라우트 계층]
-    R --> S[문제 저장소]
-    S --> J[(문제 JSON)]
-    R --> C[분야 저장소]
-    C --> K[(분야 JSON)]
+    R --> S[SQLAlchemy 저장소]
+    S --> P[(PostgreSQL)]
     R --> T[Jinja 템플릿]
     T -->|HTML 응답| U
     A[관리자 브라우저] -->|인증 및 관리 요청| R
     R -->|추가·수정·삭제| S
 ```
 
-애플리케이션은 서버 측 렌더링 방식으로 동작한다. 서버는 문제 조회, 채점, 관리자 인증과 문제 관리를 담당하고, 화면은 Jinja 템플릿을 통해 HTML로 생성한다. 데이터베이스는 사용하지 않으며 문제 데이터는 UTF-8 JSON 파일에서 읽고 원자적으로 교체 저장한다.
+애플리케이션은 서버 측 렌더링 방식으로 동작한다. 서버는 문제 조회, 채점, 관리자 인증과 문제 관리를 담당하고, 화면은 Jinja 템플릿을 통해 HTML로 생성한다. 운영 데이터는 PostgreSQL에 저장하고 SQLAlchemy 2.x 저장소를 통해 접근한다.
 
 ## 3. 디렉터리와 책임
 
 | 경로 | 책임 |
 | --- | --- |
-| `app/__init__.py` | 애플리케이션 팩토리 생성, 경로 설정, 문제 저장소 주입, 블루프린트 등록 |
+| `app/__init__.py` | 애플리케이션 팩토리 생성, 데이터베이스와 저장소 주입, 블루프린트 등록 |
+| `app/database.py` | SQLAlchemy 엔진과 제한된 연결 풀 구성 |
+| `app/models.py` | 분야, 문제, 선택지, 주관식 정답 ORM 모델 |
 | `app/routes.py` | HTTP 요청 처리, 문제 조회, 채점 요청 연결, 템플릿 렌더링 |
 | `app/admin_routes.py` | 관리자 로그인, CSRF 검증, 문제 추가·수정·삭제 요청 처리 |
-| `app/services/category_repository.py` | 분야 JSON 초기화, 조회, 중복 검증 및 추가 저장 |
-| `app/services/question_repository.py` | JSON 로드 및 검증, 분야별 조회, 답안 채점, 문제 변경 저장 |
+| `app/services/database_repositories.py` | 분야와 문제의 PostgreSQL 조회 및 변경 |
+| `app/services/category_repository.py` | 분야 도메인 객체와 이전 JSON 판독 지원 |
+| `app/services/question_repository.py` | 문제 도메인 객체, 채점과 이전 JSON 판독 지원 |
+| `app/json_importer.py` | 기존 JSON을 빈 데이터베이스에 한 번만 이전 |
 | `app/services/login_attempt_tracker.py` | 접속 주소별 로그인 실패 횟수 및 임시 차단 관리 |
-| `data/questions.json` | 객관식 문제와 정답 및 해설 저장 |
-| `data/categories.json` | 기본 분야 ID와 표시 이름 저장 |
+| `data/questions.json` | 새 환경을 위한 기본 문제 이전 원본 |
+| `data/categories.json` | 새 환경을 위한 기본 분야 이전 원본 |
+| `migrations/` | Alembic 데이터베이스 스키마 변경 이력 |
 | `templates/` | 공개 화면과 관리자 화면의 HTML 템플릿 |
 | `static/` | 공통 스타일과 문제 JSON 생성 스크립트 |
 | `tests/` | 주요 화면과 채점 흐름에 대한 자동화 테스트 |
 | `wsgi.py` | Gunicorn이 불러오는 WSGI 진입점 |
 | `Dockerfile` | Python 3.13 기반 운영 이미지 정의 |
-| `docker-compose.yml` | 웹 서비스 실행 및 호스트 포트 연결 |
+| `docker-compose.yml` | 웹, 마이그레이션, PostgreSQL 서비스 구성 |
 
 ## 4. 애플리케이션 계층
 
@@ -76,28 +79,23 @@ flowchart LR
 
 `QuestionRepository`가 문제 데이터 접근과 채점을 한곳에서 담당한다.
 
-1. `pathlib.Path`로 `data/questions.json`을 UTF-8로 읽는다.
-2. 최상위 배열, 필수 필드, 문제 유형별 선택지와 정답 타입을 검증한다.
-3. 검증한 값을 불변 데이터 클래스인 `Question`으로 변환한다.
-4. 분야별 조회 결과 또는 `GradeResult` 채점 결과를 반환한다.
-5. 관리자 변경 요청은 스레드 잠금 안에서 처리하고 임시 파일을 완성한 뒤 기존 JSON을 교체한다.
+1. 요청마다 짧은 SQLAlchemy 세션을 열어 PostgreSQL을 조회한다.
+2. ORM 모델을 불변 데이터 클래스인 `Question`으로 변환한다.
+3. 분야별 조회 결과 또는 `GradeResult` 채점 결과를 반환한다.
+4. 관리자 변경은 트랜잭션으로 커밋하고 데이터베이스 제약 조건으로 중복과 관계를 보호한다.
 
-문제 데이터는 다음 필드를 사용한다.
+데이터베이스는 다음 관계를 사용한다.
 
-| 필드 | 형식 | 설명 |
+| 테이블 | 주요 필드 | 설명 |
 | --- | --- | --- |
-| `id` | 문자열 | 문제를 구분하는 고유 식별자 |
-| `category` | 문자열 | URL과 필터에 사용하는 분야 식별자 |
-| `category_name` | 문자열 | 화면에 표시하는 분야 이름 |
-| `prompt` | 문자열 | 문제 내용 |
-| `type` | 문자열 | `multiple_choice` 또는 `short_answer` |
-| `choices` | 문자열 배열 | 객관식 선택지. 주관식은 빈 배열 |
-| `answers` | 정수 또는 문자열 배열 | 객관식 정답 인덱스들 또는 허용할 주관식 정답 표현들 |
-| `explanation` | 문자열 | 채점 후 표시하는 해설 |
+| `categories` | `identifier`, `name`, `sort_order` | 분야와 표시 순서 |
+| `questions` | `identifier`, `category_id`, `question_type`, `prompt`, `explanation`, `sort_order` | 문제 공통 정보 |
+| `question_choices` | `question_id`, `position`, `text`, `is_correct` | 객관식 선택지와 복수 정답 여부 |
+| `short_answers` | `question_id`, `position`, `text` | 허용할 주관식 정답 표현 |
 
 기존 `type` 없는 데이터와 정수 `answer` 필드는 단일정답 객관식으로 계속 읽을 수 있다. 새로 저장하는 데이터는 `type`, `answers` 형식을 사용한다. 객관식 복수정답은 선택한 답의 집합이 정확히 일치해야 정답이며, 주관식은 앞뒤 공백과 영문 대소문자를 무시하고 허용 정답 중 하나와 일치하는지 채점한다.
 
-`CategoryRepository`는 문제와 독립적으로 분야를 관리한다. 이 구조를 통해 문제가 아직 없는 새 분야도 홈과 관리자 화면에 유지된다. 분야 데이터는 `id`, `name` 필드로 구성하며, 분야 추가 시 ID와 대소문자를 구분하지 않은 이름의 중복을 검사한다.
+`CategoryRepository`는 문제와 독립적으로 분야를 관리한다. 분야 추가 시 기본 키와 대소문자를 구분하지 않는 고유 인덱스로 ID와 이름 중복을 방지한다.
 
 ## 5. 주요 요청 흐름
 
@@ -108,12 +106,12 @@ sequenceDiagram
     participant U as 사용자
     participant R as Flask 라우트
     participant Q as 문제 저장소
-    participant D as questions.json
+    participant D as PostgreSQL
 
     U->>R: 분야별 문제 요청
     R->>Q: questions_for(category)
     Q->>D: 문제 데이터 읽기
-    D-->>Q: JSON 배열
+    D-->>Q: 문제 행과 연관 데이터
     Q-->>R: Question 목록
     R-->>U: 문제 풀이 HTML
     U->>R: 답안 제출
@@ -132,7 +130,7 @@ sequenceDiagram
 
 문제 관리 목록은 URL의 `category`, `page` 쿼리로 분야 필터와 페이지 상태를 유지한다. 한 페이지에는 최대 10개 문제를 표시하며, 잘못된 분야는 전체 분야로, 범위를 벗어난 페이지는 가장 가까운 유효 페이지로 보정한다.
 
-문제 변경은 `QuestionRepository`를 통해 즉시 JSON에 반영된다. Docker 환경에서는 `/app/data` 이름 있는 볼륨이 문제 데이터를 유지하므로 컨테이너와 이미지를 다시 만들어도 관리자 변경 내용이 남는다.
+문제 변경은 `QuestionRepository`의 트랜잭션을 통해 PostgreSQL에 반영된다. 배포 시 `migrate` 서비스가 Alembic을 먼저 적용한 후 데이터베이스가 비어 있을 때만 `migration/`, 기존 `question_data` 볼륨, 이미지 기본 데이터 순서로 완전한 JSON 쌍을 찾아 가져온다. 기존 JSON 볼륨은 자동 삭제하지 않으므로 전환 확인과 복구에 사용할 수 있다.
 
 ## 6. 배포 구조
 
@@ -144,8 +142,10 @@ Docker 이미지는 `python:3.13-slim`을 기반으로 하며 Gunicorn을 통해
 - 요청 제한 시간: `30초`
 - 실행 사용자: 비루트 사용자 `appuser`
 - 재시작 정책: `unless-stopped`
-- 영속 데이터: `question_data` 이름 있는 볼륨의 `/app/data/questions.json`, `/app/data/categories.json`
-- 필수 환경변수: `ADMIN_PASSWORD`, `SECRET_KEY`
+- PostgreSQL: `postgres:17-alpine`, 외부 포트 미공개
+- 영속 데이터: `postgres_data` 이름 있는 볼륨
+- 이전 원본: `question_data` 이름 있는 볼륨을 마이그레이션 컨테이너에서 읽기 전용 사용
+- 필수 환경변수: `ADMIN_PASSWORD`, `SECRET_KEY`, `POSTGRES_PASSWORD`
 
 워커 수는 Cafe24 서버의 1GB RAM 제한을 고려한 값이다. Compose 구성은 호스트의 루프백 주소에만 `8000` 포트를 연결한다. `yangsong.cloud`에서는 운영 서버 앞단의 Nginx 리버스 프록시와 TLS 인증서를 통해 접근한다.
 
@@ -173,11 +173,10 @@ Docker 이미지는 `python:3.13-slim`을 기반으로 하며 Gunicorn을 통해
 docker compose up --build -d
 ```
 
-현재 자동화 테스트는 공개 문제 풀이와 채점, 관리자 인증 보호, CSRF 거부, 분야 추가, 문제 추가·수정·삭제와 JSON 반영을 검증한다. 배포 검증에서는 주요 경로의 HTTP 상태, 관리자 로그인, 잘못된 분야의 `404` 응답, 컨테이너 실행 사용자와 Gunicorn 로그를 함께 확인한다.
+현재 자동화 테스트는 SQLite 격리 데이터베이스로 공개 문제 풀이와 채점, JSON 최초 이전, 관리자 인증 보호, CSRF 거부, 분야 추가와 문제 CRUD를 검증한다. 배포 검증에서는 실제 PostgreSQL에 Alembic을 적용하고 데이터 수, 주요 HTTP 경로, 컨테이너 상태와 로그를 확인한다.
 
 ## 9. 확장 시 고려 사항
 
-- 문제 수가 커지거나 여러 관리자가 동시에 편집해야 하면 JSON 저장소를 데이터베이스 저장소로 교체한다.
 - 사용자별 오답 기록이 필요해지면 인증과 영속 저장 계층을 별도로 추가한다.
 - 관리자 계정이 여러 개 필요해지면 단일 환경변수 비밀번호를 사용자별 암호 해시 기반 인증으로 교체한다.
 - 실제 도메인 배포 시 리버스 프록시, HTTPS, 접근 로그, 백업 및 상태 확인 경로를 추가한다.

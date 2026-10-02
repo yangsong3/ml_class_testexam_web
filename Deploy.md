@@ -21,7 +21,8 @@ flowchart LR
     U[사용자] -->|HTTPS 443| N[Nginx]
     N -->|HTTP 127.0.0.1:8000| G[Gunicorn 컨테이너]
     G --> F[Flask 애플리케이션]
-    F --> J[(Docker 문제 데이터 볼륨)]
+    F --> P[(PostgreSQL 컨테이너)]
+    P --> V[(postgres_data 볼륨)]
 ```
 
 Nginx만 인터넷에 공개하고 Gunicorn의 8000번 포트는 서버 내부에서만 접근하게 한다. `docker-compose.yml`은 `127.0.0.1:8000:8000`으로 설정되어 있으므로 외부에서 Gunicorn 포트에 직접 접속할 수 없다.
@@ -54,7 +55,7 @@ Resolve-DnsName yangsong.cloud
 
 배포할 커밋에서 자동화 테스트와 컨테이너 실행을 먼저 확인한다.
 
-먼저 `.env.example`을 `.env`로 복사하고 로컬 테스트용 관리자 비밀번호와 세션 서명키를 설정한다. `.env`는 Git에서 제외되어 있다.
+먼저 `.env.example`을 `.env`로 복사하고 로컬 테스트용 관리자 비밀번호, PostgreSQL 비밀번호와 세션 서명키를 설정한다. `.env`는 Git에서 제외되어 있다. PostgreSQL 연결 주소에 안전하게 사용할 수 있도록 비밀번호는 아래 명령으로 생성한 16진수 값을 권장한다.
 
 ```powershell
 Copy-Item .env.example .env
@@ -168,35 +169,47 @@ python3 -c 'import secrets; print(secrets.token_hex(32))'
 chmod 600 .env
 ```
 
-출력된 난수를 `SECRET_KEY`에 사용하고, `.env`를 다음 형식으로 작성한다. 관리자 비밀번호는 12자 이상으로 충분히 길고 다른 서비스에서 사용하지 않은 값으로 정한다.
+명령을 두 번 실행해 서로 다른 난수를 `SECRET_KEY`와 `POSTGRES_PASSWORD`에 사용하고, `.env`를 다음 형식으로 작성한다. 관리자 비밀번호는 12자 이상으로 충분히 길고 다른 서비스에서 사용하지 않은 값으로 정한다.
 
 ```dotenv
 ADMIN_PASSWORD=<관리자_비밀번호>
+POSTGRES_PASSWORD=<PostgreSQL_전용_64자리_16진수>
 SECRET_KEY=<생성한_64자리_난수>
 SESSION_COOKIE_SECURE=1
 ```
 
 실제 값을 명령줄 인수나 셸 기록에 남기지 않는다. `.env`를 저장소에 추가하거나 다른 사용자에게 읽기 권한을 주지 않는다. `SECRET_KEY`를 변경하면 기존 관리자 세션은 모두 무효화된다.
 
-### 운영 포트 제한
+### PostgreSQL과 운영 포트 제한
 
-`docker-compose.yml`의 포트와 관리자 환경변수, 문제 데이터 볼륨 설정이 다음과 같은지 확인한다.
+`docker-compose.yml`은 PostgreSQL 포트를 호스트에 공개하지 않고 웹 포트만 루프백에 연결한다. `postgres_data`는 운영 데이터, 기존 `question_data`는 최초 JSON 이전 원본으로 사용한다. `migrate` 서비스가 성공해야 웹 서비스가 시작된다.
 
 ```yaml
 services:
+  db:
+    image: postgres:17-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  migrate:
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migration:/app/import-data:ro
+      - question_data:/app/legacy-data:ro
   web:
     build: .
     restart: unless-stopped
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD 환경변수를 설정해야 합니다}
+      DATABASE_URL: postgresql+psycopg://ml_exam_app:${POSTGRES_PASSWORD}@db:5432/ml_exam
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 환경변수를 설정해야 합니다}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
     ports:
       - "127.0.0.1:8000:8000"
-    volumes:
-      - question_data:/app/data
 
 volumes:
+  postgres_data:
   question_data:
 ```
 
@@ -212,6 +225,7 @@ sudo docker compose config --quiet
 sudo docker compose build --pull
 sudo docker compose up -d
 sudo docker compose ps
+sudo docker compose logs --no-color migrate
 sudo docker compose logs --no-color --tail 100 web
 ```
 
@@ -222,7 +236,7 @@ sudo docker compose exec -T web id
 curl --fail --show-error http://127.0.0.1:8000/
 ```
 
-`id` 결과에 `appuser`가 표시되고 HTTP 요청이 성공해야 다음 단계로 진행한다.
+`migrate`가 종료 코드 0, `db`가 healthy, `web`이 실행 중이어야 한다. `id` 결과에 `appuser`가 표시되고 HTTP 요청이 성공해야 다음 단계로 진행한다.
 
 ## 6. Nginx 리버스 프록시
 
@@ -337,6 +351,7 @@ git rev-parse HEAD
 git pull --ff-only
 sudo docker compose build --pull
 sudo docker compose up -d
+sudo docker compose logs --no-color migrate
 curl --fail --show-error http://127.0.0.1:8000/
 sudo docker compose logs --no-color --tail 100 web
 ```
@@ -349,35 +364,38 @@ sudo docker image prune
 
 `docker system prune`이나 볼륨 삭제 옵션은 다른 서비스 데이터까지 제거할 수 있으므로 사용하지 않는다.
 
-## 10. 문제 데이터 갱신과 백업
+## 10. 데이터 이전과 백업
 
-문제와 분야 데이터는 Docker의 `question_data` 이름 있는 볼륨에 저장된다. 새 볼륨은 이미지의 기본 JSON으로 초기화된다. 기존 볼륨에 분야 파일이 없으면 애플리케이션 시작 시 이미지의 기본 분야 데이터로 `/app/data/categories.json`을 생성한다. 이후 관리 화면에서 변경한 내용은 컨테이너를 재생성하거나 이미지를 갱신해도 유지된다. Docker 볼륨의 이 동작은 [Docker 공식 볼륨 문서](https://docs.docker.com/engine/storage/volumes/)에서 확인할 수 있다.
+최초 기동 시 Alembic이 스키마를 생성하고 `app.json_importer`가 빈 데이터베이스에 기존 JSON을 한 번만 가져온다. 원본 우선순위는 프로젝트의 `migration/`, 기존 `question_data` 볼륨, 이미지 기본 데이터 순서다. 각 위치에 `categories.json`과 `questions.json`이 모두 있어야 사용한다. 데이터베이스에 분야나 문제가 하나라도 있으면 가져오기를 건너뛰므로 재배포가 운영 데이터를 덮어쓰지 않는다.
+
+로컬에서 추출한 최신 데이터를 새 서버로 옮길 때는 최초 `docker compose up` 전에 두 파일을 서버 프로젝트의 `migration/`에 전송한다.
+
+```powershell
+scp migration/categories.json migration/questions.json <서버_사용자>@<서버_공인_IP>:/srv/ml_class_mid_exam/migration/
+```
+
+문제와 분야는 `postgres_data` 볼륨에 저장한다. 다음 명령으로 PostgreSQL 사용자 정의 형식 백업을 생성한다.
 
 ```bash
 cd /srv/ml_class_mid_exam
 mkdir -p backups
 chmod 700 backups
-sudo docker compose exec -T web sh -c 'cat /app/data/questions.json' > backups/questions-YYYYMMDD-HHMMSS.json
-sudo docker compose exec -T web sh -c 'cat /app/data/categories.json' > backups/categories-YYYYMMDD-HHMMSS.json
-python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
-python3 -m json.tool backups/categories-YYYYMMDD-HHMMSS.json > /dev/null
+sudo docker compose exec -T db pg_dump -U ml_exam_app -d ml_exam -Fc > backups/ml-exam-YYYYMMDD-HHMMSS.dump
+test -s backups/ml-exam-YYYYMMDD-HHMMSS.dump
 ```
 
-`YYYYMMDD-HHMMSS`는 실제 백업 시각으로 바꾼다. 관리자 변경 데이터는 Git 저장소에 자동 반영되지 않으므로 배포 전후와 문제 일괄 변경 전에 별도로 백업한다. `docker compose down -v`는 문제 데이터 볼륨을 삭제하므로 실행하지 않는다.
-
-백업을 복원할 때는 먼저 JSON 형식을 검사하고 웹 컨테이너를 중지한다.
+복원은 기존 데이터를 교체하므로 점검 시간을 확보하고 백업 파일을 확인한 뒤 실행한다.
 
 ```bash
-python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
-python3 -m json.tool backups/categories-YYYYMMDD-HHMMSS.json > /dev/null
 sudo docker compose stop web
-sudo docker compose run --rm -T web sh -c 'cat > /app/data/questions.json' < backups/questions-YYYYMMDD-HHMMSS.json
-sudo docker compose run --rm -T web sh -c 'cat > /app/data/categories.json' < backups/categories-YYYYMMDD-HHMMSS.json
+sudo docker compose exec -T db dropdb -U ml_exam_app --if-exists ml_exam
+sudo docker compose exec -T db createdb -U ml_exam_app ml_exam
+sudo docker compose exec -T db pg_restore -U ml_exam_app -d ml_exam --clean --if-exists < backups/ml-exam-YYYYMMDD-HHMMSS.dump
 sudo docker compose up -d
 curl --fail --show-error http://127.0.0.1:8000/
 ```
 
-사용자 답안과 점수는 서버에 저장되지 않으므로 별도의 사용자 데이터 백업은 없다.
+`docker compose down -v`는 PostgreSQL 운영 볼륨까지 삭제하므로 실행하지 않는다. 기존 `question_data` 볼륨은 PostgreSQL 이전과 백업을 확인할 때까지 보존한다. 사용자 답안과 점수는 저장하지 않는다.
 
 ## 11. 장애 대응과 복구
 
@@ -390,13 +408,13 @@ sudo docker compose logs --no-color --tail 200 web
 sudo docker compose config --quiet
 ```
 
-문제 JSON 오류가 의심되면 볼륨에 저장된 파일을 복사해 형식을 확인한다.
+데이터베이스 연결이나 마이그레이션 오류가 의심되면 다음 상태와 로그를 확인한다.
 
 ```bash
-sudo docker compose exec -T web sh -c 'cat /app/data/questions.json' > /tmp/questions-check.json
-sudo docker compose exec -T web sh -c 'cat /app/data/categories.json' > /tmp/categories-check.json
-python3 -m json.tool /tmp/questions-check.json > /dev/null
-python3 -m json.tool /tmp/categories-check.json > /dev/null
+sudo docker compose ps --all
+sudo docker compose logs --no-color --tail 200 db migrate web
+sudo docker compose exec -T db pg_isready -U ml_exam_app -d ml_exam
+sudo docker compose exec -T db psql -U ml_exam_app -d ml_exam -c 'select count(*) from questions;'
 ```
 
 ### Nginx가 응답하지 않을 때
@@ -428,11 +446,12 @@ curl --fail --show-error http://127.0.0.1:8000/
 
 - [ ] DNS `A` 레코드가 서버 공인 IP를 가리킨다.
 - [ ] Docker Engine과 Compose 플러그인이 정상 동작한다.
-- [ ] `.env`에 관리자 비밀번호와 무작위 세션 서명키가 설정되어 있고 권한이 `600`이다.
+- [ ] `.env`에 관리자 비밀번호, PostgreSQL 전용 비밀번호와 무작위 세션 서명키가 설정되어 있고 권한이 `600`이다.
 - [ ] Compose 포트가 `127.0.0.1:8000:8000`으로 제한되어 있다.
 - [ ] 컨테이너가 `appuser`로 실행된다.
 - [ ] 관리자 로그인과 분야 추가 및 문제 추가·수정·삭제가 정상 동작한다.
-- [ ] 분야와 문제 데이터 볼륨의 백업 및 복원 절차를 확인했다.
+- [ ] `db` 상태가 healthy이고 `migrate` 서비스가 종료 코드 0이다.
+- [ ] PostgreSQL 백업 및 복원 절차를 확인했다.
 - [ ] Nginx 설정 문법 검사를 통과한다.
 - [ ] UFW에서 SSH, HTTP, HTTPS만 허용한다.
 - [ ] HTTPS 접속과 인증서 자동 갱신 테스트가 성공한다.

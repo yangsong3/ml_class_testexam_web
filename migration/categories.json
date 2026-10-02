@@ -1,0 +1,30 @@
+[
+  {
+    "id": "basics",
+    "name": "머신러닝 기초"
+  },
+  {
+    "id": "features",
+    "name": "데이터와 피처"
+  },
+  {
+    "id": "numpy",
+    "name": "NumPy"
+  },
+  {
+    "id": "pandas",
+    "name": "pandas"
+  },
+  {
+    "id": "visualization",
+    "name": "데이터 시각화"
+  },
+  {
+    "id": "computer-basics",
+    "name": "컴퓨터구조-기초"
+  },
+  {
+    "id": "computer-cpu",
+    "name": "컴퓨터구조-cpu"
+  }
+]

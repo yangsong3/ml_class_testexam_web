@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from flask import Flask
@@ -6,6 +5,9 @@ from flask.testing import FlaskClient
 from werkzeug.datastructures import MultiDict
 
 from app import create_app
+from app.database import Database
+from app.json_importer import import_json_if_empty
+from app.models import Base
 
 
 def copy_test_data(tmp_path: Path) -> tuple[Path, Path]:
@@ -25,15 +27,18 @@ def copy_test_data(tmp_path: Path) -> tuple[Path, Path]:
 def create_test_app(tmp_path: Path) -> Flask:
     """격리된 데이터 파일을 사용하는 테스트 앱을 생성한다."""
     question_path, category_path = copy_test_data(tmp_path)
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'app.db').as_posix()}"
+    database = Database(database_url)
+    Base.metadata.create_all(database.engine)
+    import_json_if_empty(database.session_factory, category_path, question_path)
+    database.dispose()
     return create_app(
         {
             "TESTING": True,
             "ADMIN_PASSWORD": "테스트-관리자-비밀번호",
             "SECRET_KEY": "테스트에서만-사용하는-세션-서명키",
             "SESSION_COOKIE_SECURE": False,
-            "QUESTION_PATH": question_path,
-            "CATEGORY_PATH": category_path,
-            "CATEGORY_SEED_PATH": category_path,
+            "DATABASE_URL": database_url,
         }
     )
 
@@ -93,17 +98,8 @@ def test_admin_requires_login_and_csrf(tmp_path: Path) -> None:
 
 
 def test_admin_rejects_missing_configuration(tmp_path: Path) -> None:
-    question_path, category_path = copy_test_data(tmp_path)
-    app = create_app(
-        {
-            "TESTING": True,
-            "ADMIN_PASSWORD": None,
-            "SECRET_KEY": None,
-            "QUESTION_PATH": question_path,
-            "CATEGORY_PATH": category_path,
-            "CATEGORY_SEED_PATH": category_path,
-        }
-    )
+    app = create_test_app(tmp_path)
+    app.config.update(ADMIN_PASSWORD=None, SECRET_KEY=None)
 
     response = app.test_client().get("/admin/login")
 
@@ -166,31 +162,33 @@ def test_admin_can_add_category(tmp_path: Path) -> None:
     json_form_content = client.get("/question-form").get_data(as_text=True)
     assert '<option value="deep-learning">딥러닝</option>' in json_form_content
 
-    category_path = Path(app.config["CATEGORY_PATH"])
-    stored_categories = json.loads(category_path.read_text(encoding="utf-8"))
-    assert {"id": "deep-learning", "name": "딥러닝"} in stored_categories
+    stored_category = app.config["CATEGORY_REPOSITORY"].find("deep-learning")
+    assert stored_category is not None
+    assert stored_category.name == "딥러닝"
 
 
-def test_category_data_is_initialized_when_volume_file_is_missing(
-    tmp_path: Path,
-) -> None:
+def test_json_data_is_imported_when_database_is_empty(tmp_path: Path) -> None:
     data_path = Path(__file__).resolve().parent.parent / "data"
     question_path = tmp_path / "questions.json"
     question_path.write_text(
         (data_path / "questions.json").read_text(encoding="utf-8"), encoding="utf-8"
     )
-    category_path = tmp_path / "volume" / "categories.json"
+    category_path = data_path / "categories.json"
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'import.db').as_posix()}"
+    database = Database(database_url)
+    Base.metadata.create_all(database.engine)
 
-    app = create_app(
-        {
-            "TESTING": True,
-            "QUESTION_PATH": question_path,
-            "CATEGORY_PATH": category_path,
-            "CATEGORY_SEED_PATH": data_path / "categories.json",
-        }
+    imported = import_json_if_empty(
+        database.session_factory, category_path, question_path
     )
+    imported_again = import_json_if_empty(
+        database.session_factory, category_path, question_path
+    )
+    database.dispose()
+    app = create_app({"TESTING": True, "DATABASE_URL": database_url})
 
-    assert category_path.exists()
+    assert imported is True
+    assert imported_again is False
     assert app.config["CATEGORY_REPOSITORY"].find("numpy") is not None
 
 
@@ -276,9 +274,7 @@ def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:
     assert delete_response.status_code == 200
     assert "문제를 삭제했습니다." in delete_response.get_data(as_text=True)
 
-    question_path = Path(app.config["QUESTION_PATH"])
-    stored_questions = json.loads(question_path.read_text(encoding="utf-8"))
-    assert all(question["id"] != "numpy-999" for question in stored_questions)
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-999") is None
 
 
 def test_short_answer_and_multiple_correct_answers(tmp_path: Path) -> None:
@@ -353,15 +349,11 @@ def test_short_answer_and_multiple_correct_answers(tmp_path: Path) -> None:
     ).get_data(as_text=True)
     assert "<strong>1</strong>문제를 맞혔어요." in partial_result
 
-    stored_questions = json.loads(
-        Path(app.config["QUESTION_PATH"]).read_text(encoding="utf-8")
-    )
-    stored_short_answer = next(
-        question for question in stored_questions if question["id"] == "numpy-998"
-    )
-    stored_multiple_choice = next(
-        question for question in stored_questions if question["id"] == "numpy-997"
-    )
-    assert stored_short_answer["type"] == "short_answer"
-    assert stored_short_answer["answers"] == ["NumPy", "numpy"]
-    assert stored_multiple_choice["answers"] == [0, 2]
+    repository = app.config["QUESTION_REPOSITORY"]
+    stored_short_answer = repository.find("numpy-998")
+    stored_multiple_choice = repository.find("numpy-997")
+    assert stored_short_answer is not None
+    assert stored_short_answer.question_type == "short_answer"
+    assert stored_short_answer.accepted_text_answers == ("NumPy", "numpy")
+    assert stored_multiple_choice is not None
+    assert stored_multiple_choice.correct_choice_indices == (0, 2)

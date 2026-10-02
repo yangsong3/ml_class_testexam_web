@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="hero">
-  <p class="eyebrow">머신러닝 수업 중간고사 대비</p>
+  <p class="eyebrow">머신러닝/컴퓨터구조 중간고사 대비</p>
   <h1>집 가고 싶다</h1>
-  <p>개념 · 피처 · NumPy · pandas · 데이터 시각화 문제를 풀고 즉시 해설을 확인하세요.</p>
+  <p>영어로 I want to go home</p>
   <a class="button primary" href="{{ url_for('quiz.show_quiz', category='all') }}">전체 문제 풀기</a>
 </section>
 <section>
-  <div class="section-heading"><h2>분야별 학습</h2><span>분야별 3문제</span></div>
+  <div class="section-heading"><h2>분야별 학습</h2><span>분야별 n문제</span></div>
   <div class="category-grid">
   {% for item in categories %}
     {% if item.count > 0 %}

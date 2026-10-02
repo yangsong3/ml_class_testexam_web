@@ -6,10 +6,10 @@ from pathlib import Path
 from flask import Flask
 
 from app.admin_routes import admin
+from app.database import Database
 from app.routes import quiz
-from app.services.category_repository import CategoryRepository
+from app.services.database_repositories import CategoryRepository, QuestionRepository
 from app.services.login_attempt_tracker import LoginAttemptTracker
-from app.services.question_repository import QuestionRepository
 
 
 def create_app(test_config: Mapping[str, object] | None = None) -> Flask:
@@ -22,14 +22,8 @@ def create_app(test_config: Mapping[str, object] | None = None) -> Flask:
     )
     app.config.from_mapping(
         ADMIN_PASSWORD=os.environ.get("ADMIN_PASSWORD"),
+        DATABASE_URL=os.environ.get("DATABASE_URL"),
         SECRET_KEY=os.environ.get("SECRET_KEY"),
-        CATEGORY_PATH=project_root / "data" / "categories.json",
-        CATEGORY_SEED_PATH=Path(
-            os.environ.get(
-                "CATEGORY_SEED_PATH", project_root / "data" / "categories.json"
-            )
-        ),
-        QUESTION_PATH=project_root / "data" / "questions.json",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
@@ -39,12 +33,13 @@ def create_app(test_config: Mapping[str, object] | None = None) -> Flask:
     if test_config is not None:
         app.config.update(test_config)
 
-    app.config["QUESTION_REPOSITORY"] = QuestionRepository(
-        Path(app.config["QUESTION_PATH"])
-    )
-    app.config["CATEGORY_REPOSITORY"] = CategoryRepository(
-        Path(app.config["CATEGORY_PATH"]), Path(app.config["CATEGORY_SEED_PATH"])
-    )
+    database_url = app.config.get("DATABASE_URL")
+    if not isinstance(database_url, str) or not database_url:
+        raise RuntimeError("DATABASE_URL 환경변수가 필요합니다.")
+    database = Database(database_url)
+    app.extensions["database"] = database
+    app.config["QUESTION_REPOSITORY"] = QuestionRepository(database.session_factory)
+    app.config["CATEGORY_REPOSITORY"] = CategoryRepository(database.session_factory)
     app.config["LOGIN_ATTEMPT_TRACKER"] = LoginAttemptTracker()
     app.register_blueprint(quiz)
     app.register_blueprint(admin)

@@ -1,7 +1,6 @@
 from flask import Blueprint, abort, current_app, render_template, request
 
-from app.services.category_repository import CategoryRepository
-from app.services.question_repository import QuestionRepository
+from app.services.database_repositories import CategoryRepository, QuestionRepository
 
 quiz = Blueprint("quiz", __name__)
 

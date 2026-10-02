@@ -61,8 +61,8 @@ class GradeResult:
         )
 
 
-class QuestionRepository:
-    """JSON 파일에서 문제를 읽고 채점 기능을 제공한다."""
+class JsonQuestionRepository:
+    """이전용 JSON 문제를 읽고 공통 채점 기능을 제공한다."""
 
     def __init__(self, question_path: Path) -> None:
         self._question_path = question_path
