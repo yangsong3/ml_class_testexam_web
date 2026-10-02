@@ -13,7 +13,7 @@
   </div>
 {% endif %}
 
-<form method="post" class="builder-form admin-question-form" {% if is_create %}data-id-recommendations{% endif %}>
+<form method="post" class="builder-form admin-question-form" data-question-type-controls {% if is_create %}data-id-recommendations{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label>문제 ID
     {% set initial_category = question.category if question else categories[0][0] %}
@@ -29,21 +29,36 @@
     </select>
   </label>
   <label>문제 내용<textarea name="prompt" required maxlength="500">{{ question.prompt if question else '' }}</textarea></label>
-  {% for index in range(4) %}
-    <label>선택지 {{ index + 1 }}<input name="choice_{{ index }}" required maxlength="200" value="{{ question.choices[index] if question and index < question.choices|length else '' }}"></label>
-  {% endfor %}
-  <label>정답 번호
-    <select name="answer" required>
-      {% for index in range(4) %}
-        <option value="{{ index }}" {% if question and question.answer == index %}selected{% endif %}>{{ index + 1 }}번</option>
-      {% endfor %}
+  {% set selected_type = question.question_type if question else 'multiple_choice' %}
+  <label>문제 유형
+    <select name="question_type" required>
+      <option value="multiple_choice" {% if selected_type == 'multiple_choice' %}selected{% endif %}>객관식</option>
+      <option value="short_answer" {% if selected_type == 'short_answer' %}selected{% endif %}>주관식</option>
     </select>
   </label>
+  <section class="question-type-fields" data-choice-fields>
+    {% for index in range(4) %}
+      <label>선택지 {{ index + 1 }}<input name="choice_{{ index }}" required maxlength="200" value="{{ question.choices[index] if question and index < question.choices|length else '' }}"></label>
+    {% endfor %}
+    <fieldset class="answer-options">
+      <legend>정답 선택</legend>
+      <small>정답이 여러 개라면 모두 선택하세요.</small>
+      {% for index in range(4) %}
+        <label><input type="checkbox" name="answers" value="{{ index }}" {% if question and index in question.correct_choice_indices %}checked{% endif %}> {{ index + 1 }}번</label>
+      {% endfor %}
+    </fieldset>
+  </section>
+  <section class="question-type-fields" data-short-answer-fields {% if selected_type != 'short_answer' %}hidden{% endif %}>
+    <label>주관식 정답
+      <textarea name="text_answers" maxlength="1000" placeholder="정답을 입력하세요.&#10;다른 정답 표현이 있으면 다음 줄에 입력하세요.">{{ question.accepted_text_answers|join('\n') if question else '' }}</textarea>
+      <small>허용할 정답 표현을 한 줄에 하나씩 입력합니다. 채점할 때 앞뒤 공백과 영문 대소문자는 구분하지 않습니다.</small>
+    </label>
+  </section>
   <label>해설<textarea name="explanation" required maxlength="1000">{{ question.explanation if question else '' }}</textarea></label>
   <div>
     <button class="button primary" type="submit">저장</button>
     <a class="button secondary" href="{{ url_for('admin.dashboard') }}">취소</a>
   </div>
 </form>
-{% if is_create %}<script src="{{ url_for('static', filename='admin_question_form.js') }}"></script>{% endif %}
+<script src="{{ url_for('static', filename='admin_question_form.js') }}"></script>
 {% endblock %}

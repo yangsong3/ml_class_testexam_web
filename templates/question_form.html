@@ -11,11 +11,24 @@
   <label>문제 ID<input name="id" required placeholder="numpy-004"></label>
   <label>분야<select name="category" required>{% for category in categories %}<option value="{{ category.identifier }}">{{ category.name }}</option>{% endfor %}</select></label>
   <label>문제 내용<textarea name="prompt" required></textarea></label>
-  <label>선택지 1<input name="choice" required></label>
-  <label>선택지 2<input name="choice" required></label>
-  <label>선택지 3<input name="choice" required></label>
-  <label>선택지 4<input name="choice" required></label>
-  <label>정답 번호<select name="answer" required><option value="0">1번</option><option value="1">2번</option><option value="2">3번</option><option value="3">4번</option></select></label>
+  <label>문제 유형<select name="question_type" required><option value="multiple_choice">객관식</option><option value="short_answer">주관식</option></select></label>
+  <section class="question-type-fields" data-choice-fields>
+    <label>선택지 1<input name="choice" required></label>
+    <label>선택지 2<input name="choice" required></label>
+    <label>선택지 3<input name="choice" required></label>
+    <label>선택지 4<input name="choice" required></label>
+    <fieldset class="answer-options">
+      <legend>정답 선택</legend>
+      <small>정답이 여러 개라면 모두 선택하세요.</small>
+      <label><input type="checkbox" name="answers" value="0"> 1번</label>
+      <label><input type="checkbox" name="answers" value="1"> 2번</label>
+      <label><input type="checkbox" name="answers" value="2"> 3번</label>
+      <label><input type="checkbox" name="answers" value="3"> 4번</label>
+    </fieldset>
+  </section>
+  <section class="question-type-fields" data-short-answer-fields hidden>
+    <label>주관식 정답<textarea name="text_answers" placeholder="허용할 정답 표현을 한 줄에 하나씩 입력하세요."></textarea></label>
+  </section>
   <label>해설<textarea name="explanation" required></textarea></label>
   <button class="button primary" type="submit">JSON 내려받기</button>
 </form>

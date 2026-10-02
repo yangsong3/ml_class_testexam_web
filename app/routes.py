@@ -1,5 +1,3 @@
-from collections.abc import Mapping
-
 from flask import Blueprint, abort, current_app, render_template, request
 
 from app.services.category_repository import CategoryRepository
@@ -62,7 +60,7 @@ def show_result() -> str:
     if not questions:
         abort(404)
 
-    responses: Mapping[str, str] = request.form
+    responses = {key: tuple(values) for key, values in request.form.lists()}
     results = repository.grade(questions, responses)
     correct_count = sum(result.is_correct for result in results)
     return render_template(

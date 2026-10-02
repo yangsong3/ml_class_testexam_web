@@ -7,17 +7,35 @@ from pathlib import Path
 from threading import Lock
 
 
+MULTIPLE_CHOICE = "multiple_choice"
+SHORT_ANSWER = "short_answer"
+
+
 @dataclass(frozen=True)
 class Question:
-    """객관식 문제 한 개를 표현한다."""
+    """객관식 또는 주관식 문제 한 개를 표현한다."""
 
     identifier: str
     category: str
     category_name: str
     prompt: str
+    question_type: str
     choices: tuple[str, ...]
-    answer: int
+    correct_choice_indices: tuple[int, ...]
+    accepted_text_answers: tuple[str, ...]
     explanation: str
+
+    @property
+    def is_short_answer(self) -> bool:
+        """주관식 문제인지 반환한다."""
+        return self.question_type == SHORT_ANSWER
+
+    @property
+    def correct_answer_text(self) -> str:
+        """화면에 표시할 정답 문자열을 반환한다."""
+        if self.is_short_answer:
+            return " / ".join(self.accepted_text_answers)
+        return ", ".join(self.choices[index] for index in self.correct_choice_indices)
 
 
 @dataclass(frozen=True)
@@ -25,8 +43,22 @@ class GradeResult:
     """문제별 채점 결과를 표현한다."""
 
     question: Question
-    selected_answer: int | None
+    selected_choice_indices: tuple[int, ...]
+    submitted_text: str | None
     is_correct: bool
+
+    @property
+    def submitted_answer_text(self) -> str:
+        """화면에 표시할 제출 답안 문자열을 반환한다."""
+        if self.question.is_short_answer:
+            return self.submitted_text or "미응답"
+        if not self.selected_choice_indices:
+            return "미응답"
+        return ", ".join(
+            self.question.choices[index]
+            for index in self.selected_choice_indices
+            if 0 <= index < len(self.question.choices)
+        )
 
 
 class QuestionRepository:
@@ -58,34 +90,60 @@ class QuestionRepository:
             "category_name",
             "prompt",
             "choices",
-            "answer",
             "explanation",
         }
         if not required_fields.issubset(raw_question):
             raise RuntimeError("문제 데이터에 필수 항목이 누락되었습니다.")
 
-        choices = raw_question["choices"]
-        answer = raw_question["answer"]
-        if (
-            not isinstance(choices, list)
-            or len(choices) < 2
-            or not all(isinstance(choice, str) for choice in choices)
-            or not isinstance(answer, int)
-            or answer not in range(len(choices))
-        ):
-            raise RuntimeError("선택지 또는 정답 데이터가 올바르지 않습니다.")
-
         text_fields = ("id", "category", "category_name", "prompt", "explanation")
         if not all(isinstance(raw_question[field], str) for field in text_fields):
             raise RuntimeError("문제의 텍스트 항목은 문자열이어야 합니다.")
+
+        question_type = raw_question.get("type", MULTIPLE_CHOICE)
+        choices = raw_question["choices"]
+        raw_answers = raw_question.get("answers")
+        if raw_answers is None and "answer" in raw_question:
+            raw_answers = [raw_question["answer"]]
+        if question_type not in {MULTIPLE_CHOICE, SHORT_ANSWER}:
+            raise RuntimeError("문제 유형이 올바르지 않습니다.")
+        if not isinstance(choices, list) or not all(
+            isinstance(choice, str) for choice in choices
+        ):
+            raise RuntimeError("선택지 데이터가 올바르지 않습니다.")
+        if not isinstance(raw_answers, list) or not raw_answers:
+            raise RuntimeError("정답 데이터가 올바르지 않습니다.")
+
+        if question_type == MULTIPLE_CHOICE:
+            if len(choices) < 2 or not all(choice.strip() for choice in choices):
+                raise RuntimeError("객관식 선택지 데이터가 올바르지 않습니다.")
+            if not all(
+                type(answer) is int and answer in range(len(choices))
+                for answer in raw_answers
+            ):
+                raise RuntimeError("객관식 정답 데이터가 올바르지 않습니다.")
+            correct_choice_indices = tuple(sorted(set(raw_answers)))
+            accepted_text_answers: tuple[str, ...] = ()
+        else:
+            if choices:
+                raise RuntimeError("주관식 문제에는 선택지를 등록할 수 없습니다.")
+            if not all(
+                isinstance(answer, str) and answer.strip() for answer in raw_answers
+            ):
+                raise RuntimeError("주관식 정답 데이터가 올바르지 않습니다.")
+            correct_choice_indices = ()
+            accepted_text_answers = tuple(
+                dict.fromkeys(answer.strip() for answer in raw_answers)
+            )
 
         return Question(
             identifier=raw_question["id"],
             category=raw_question["category"],
             category_name=raw_question["category_name"],
             prompt=raw_question["prompt"],
+            question_type=question_type,
             choices=tuple(choices),
-            answer=answer,
+            correct_choice_indices=correct_choice_indices,
+            accepted_text_answers=accepted_text_answers,
             explanation=raw_question["explanation"],
         )
 
@@ -168,18 +226,7 @@ class QuestionRepository:
             self._write_questions(remaining)
 
     def _write_questions(self, questions: Sequence[Question]) -> None:
-        raw_questions = [
-            {
-                "id": question.identifier,
-                "category": question.category,
-                "category_name": question.category_name,
-                "prompt": question.prompt,
-                "choices": list(question.choices),
-                "answer": question.answer,
-                "explanation": question.explanation,
-            }
-            for question in questions
-        ]
+        raw_questions = [self._to_raw_question(question) for question in questions]
         temporary_path = self._question_path.with_suffix(
             f"{self._question_path.suffix}.tmp"
         )
@@ -190,22 +237,62 @@ class QuestionRepository:
         temporary_path.replace(self._question_path)
 
     @staticmethod
+    def _to_raw_question(question: Question) -> dict[str, object]:
+        """문제 객체를 저장 가능한 JSON 객체로 변환한다."""
+        answers: list[int] | list[str]
+        if question.is_short_answer:
+            answers = list(question.accepted_text_answers)
+        else:
+            answers = list(question.correct_choice_indices)
+        return {
+            "id": question.identifier,
+            "category": question.category,
+            "category_name": question.category_name,
+            "prompt": question.prompt,
+            "type": question.question_type,
+            "choices": list(question.choices),
+            "answers": answers,
+            "explanation": question.explanation,
+        }
+
+    @staticmethod
     def grade(
-        questions: Sequence[Question], responses: Mapping[str, str]
+        questions: Sequence[Question], responses: Mapping[str, Sequence[str]]
     ) -> tuple[GradeResult, ...]:
         """제출된 답안을 문제별로 채점한다."""
         results: list[GradeResult] = []
         for question in questions:
-            response = responses.get(f"answer_{question.identifier}")
-            try:
-                selected_answer = int(response) if response is not None else None
-            except ValueError:
-                selected_answer = None
+            submitted_values = responses.get(f"answer_{question.identifier}", ())
+            if question.is_short_answer:
+                submitted_text = submitted_values[0].strip() if submitted_values else None
+                normalized_answer = submitted_text.casefold() if submitted_text else ""
+                accepted_answers = {
+                    answer.casefold() for answer in question.accepted_text_answers
+                }
+                selected_choice_indices: tuple[int, ...] = ()
+                is_correct = bool(normalized_answer) and normalized_answer in accepted_answers
+            else:
+                submitted_text = None
+                try:
+                    selected_choice_indices = tuple(
+                        sorted({int(value) for value in submitted_values})
+                    )
+                except ValueError:
+                    selected_choice_indices = ()
+                valid_selection = all(
+                    index in range(len(question.choices))
+                    for index in selected_choice_indices
+                )
+                is_correct = (
+                    valid_selection
+                    and selected_choice_indices == question.correct_choice_indices
+                )
             results.append(
                 GradeResult(
                     question=question,
-                    selected_answer=selected_answer,
-                    is_correct=selected_answer == question.answer,
+                    selected_choice_indices=selected_choice_indices,
+                    submitted_text=submitted_text,
+                    is_correct=is_correct,
                 )
             )
         return tuple(results)

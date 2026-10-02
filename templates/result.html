@@ -12,8 +12,8 @@
   <article class="answer-card {{ 'correct' if result.is_correct else 'incorrect' }}">
     <p class="status">{{ '정답' if result.is_correct else '오답' }}</p>
     <h2>{{ loop.index }}. {{ result.question.prompt }}</h2>
-    <p>내 답: {{ result.question.choices[result.selected_answer] if result.selected_answer is not none and 0 <= result.selected_answer < result.question.choices|length else '미응답' }}</p>
-    <p>정답: <strong>{{ result.question.choices[result.question.answer] }}</strong></p>
+    <p>내 답: {{ result.submitted_answer_text }}</p>
+    <p>정답: <strong>{{ result.question.correct_answer_text }}</strong></p>
     <div class="explanation"><b>해설</b><br>{{ result.question.explanation }}</div>
   </article>
 {% endfor %}

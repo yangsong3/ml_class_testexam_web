@@ -3,6 +3,7 @@ from pathlib import Path
 
 from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.datastructures import MultiDict
 
 from app import create_app
 
@@ -66,11 +67,12 @@ def question_form_data(csrf_token: str, prompt: str = "새 문제") -> dict[str,
         "identifier": "numpy-999",
         "category": "numpy",
         "prompt": prompt,
+        "question_type": "multiple_choice",
         "choice_0": "선택지 1",
         "choice_1": "선택지 2",
         "choice_2": "선택지 3",
         "choice_3": "선택지 4",
-        "answer": "2",
+        "answers": "2",
         "explanation": "테스트 해설입니다.",
     }
 
@@ -277,3 +279,89 @@ def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:
     question_path = Path(app.config["QUESTION_PATH"])
     stored_questions = json.loads(question_path.read_text(encoding="utf-8"))
     assert all(question["id"] != "numpy-999" for question in stored_questions)
+
+
+def test_short_answer_and_multiple_correct_answers(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    csrf_token = get_csrf_token(client)
+
+    short_answer_response = client.post(
+        "/admin/questions/new",
+        data={
+            "csrf_token": csrf_token,
+            "identifier": "numpy-998",
+            "category": "numpy",
+            "prompt": "넘파이의 영문 표기는?",
+            "question_type": "short_answer",
+            "text_answers": "NumPy\nnumpy",
+            "explanation": "NumPy라고 표기합니다.",
+        },
+    )
+    assert short_answer_response.status_code == 302
+
+    multiple_choice_response = client.post(
+        "/admin/questions/new",
+        data=MultiDict(
+            [
+                ("csrf_token", csrf_token),
+                ("identifier", "numpy-997"),
+                ("category", "numpy"),
+                ("prompt", "배열 연산의 특징을 모두 고르세요."),
+                ("question_type", "multiple_choice"),
+                ("choice_0", "벡터화 연산"),
+                ("choice_1", "문자열 전용"),
+                ("choice_2", "브로드캐스팅"),
+                ("choice_3", "파일 저장 전용"),
+                ("answers", "0"),
+                ("answers", "2"),
+                ("explanation", "벡터화 연산과 브로드캐스팅을 지원합니다."),
+            ]
+        ),
+    )
+    assert multiple_choice_response.status_code == 302
+
+    quiz_content = client.get("/quiz?category=numpy").get_data(as_text=True)
+    assert "주관식 답안" in quiz_content
+    assert "복수 정답 문제입니다." in quiz_content
+    assert 'type="checkbox" name="answer_numpy-997"' in quiz_content
+
+    result_response = client.post(
+        "/result",
+        data=MultiDict(
+            [
+                ("category", "numpy"),
+                ("answer_numpy-998", "  NUMPY  "),
+                ("answer_numpy-997", "0"),
+                ("answer_numpy-997", "2"),
+            ]
+        ),
+    )
+    result_content = result_response.get_data(as_text=True)
+    assert result_response.status_code == 200
+    assert "<strong>2</strong>문제를 맞혔어요." in result_content
+    assert "벡터화 연산, 브로드캐스팅" in result_content
+
+    partial_result = client.post(
+        "/result",
+        data={
+            "category": "numpy",
+            "answer_numpy-998": "NumPy",
+            "answer_numpy-997": "0",
+        },
+    ).get_data(as_text=True)
+    assert "<strong>1</strong>문제를 맞혔어요." in partial_result
+
+    stored_questions = json.loads(
+        Path(app.config["QUESTION_PATH"]).read_text(encoding="utf-8")
+    )
+    stored_short_answer = next(
+        question for question in stored_questions if question["id"] == "numpy-998"
+    )
+    stored_multiple_choice = next(
+        question for question in stored_questions if question["id"] == "numpy-997"
+    )
+    assert stored_short_answer["type"] == "short_answer"
+    assert stored_short_answer["answers"] == ["NumPy", "numpy"]
+    assert stored_multiple_choice["answers"] == [0, 2]

@@ -19,7 +19,12 @@ from flask import (
 
 from app.services.login_attempt_tracker import LoginAttemptTracker
 from app.services.category_repository import Category, CategoryRepository
-from app.services.question_repository import Question, QuestionRepository
+from app.services.question_repository import (
+    MULTIPLE_CHOICE,
+    SHORT_ANSWER,
+    Question,
+    QuestionRepository,
+)
 
 admin = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -35,8 +40,10 @@ class QuestionFormValues:
     identifier: str
     category: str
     prompt: str
+    question_type: str
     choices: tuple[str, ...]
-    answer: int
+    correct_choice_indices: tuple[int, ...]
+    accepted_text_answers: tuple[str, ...]
     explanation: str
 
 
@@ -373,11 +380,11 @@ def question_from_form() -> tuple[
     identifier = request.form.get("identifier", "").strip()
     category = request.form.get("category", "").strip()
     prompt = request.form.get("prompt", "").strip()
-    choices = tuple(
+    question_type = request.form.get("question_type", "").strip()
+    submitted_choices = tuple(
         request.form.get(f"choice_{index}", "").strip() for index in range(4)
     )
     explanation = request.form.get("explanation", "").strip()
-    answer_value = request.form.get("answer", "")
     errors: list[str] = []
 
     if not IDENTIFIER_PATTERN.fullmatch(identifier):
@@ -387,24 +394,50 @@ def question_from_form() -> tuple[
         errors.append("올바른 분야를 선택해 주세요.")
     if not prompt or len(prompt) > 500:
         errors.append("문제 내용은 1~500자로 입력해 주세요.")
-    if any(not choice or len(choice) > 200 for choice in choices):
-        errors.append("선택지는 각각 1~200자로 입력해 주세요.")
     if not explanation or len(explanation) > 1000:
         errors.append("해설은 1~1000자로 입력해 주세요.")
 
-    try:
-        answer = int(answer_value)
-    except ValueError:
-        answer = -1
-    if answer not in range(len(choices)):
-        errors.append("올바른 정답 번호를 선택해 주세요.")
+    correct_choice_indices: tuple[int, ...] = ()
+    accepted_text_answers: tuple[str, ...] = ()
+    if question_type == MULTIPLE_CHOICE:
+        choices = submitted_choices
+        if any(not choice or len(choice) > 200 for choice in choices):
+            errors.append("객관식 선택지는 각각 1~200자로 입력해 주세요.")
+        try:
+            correct_choice_indices = tuple(
+                sorted({int(value) for value in request.form.getlist("answers")})
+            )
+        except ValueError:
+            correct_choice_indices = ()
+        if not correct_choice_indices or any(
+            answer not in range(len(choices)) for answer in correct_choice_indices
+        ):
+            errors.append("객관식 정답을 하나 이상 선택해 주세요.")
+    elif question_type == SHORT_ANSWER:
+        choices = ()
+        accepted_text_answers = tuple(
+            dict.fromkeys(
+                line.strip()
+                for line in request.form.get("text_answers", "").splitlines()
+                if line.strip()
+            )
+        )
+        if not accepted_text_answers or any(
+            len(answer) > 200 for answer in accepted_text_answers
+        ):
+            errors.append("주관식 정답을 줄마다 1~200자로 하나 이상 입력해 주세요.")
+    else:
+        choices = submitted_choices
+        errors.append("올바른 문제 유형을 선택해 주세요.")
 
     form_values = QuestionFormValues(
         identifier=identifier,
         category=category,
         prompt=prompt,
+        question_type=question_type,
         choices=choices,
-        answer=answer,
+        correct_choice_indices=correct_choice_indices,
+        accepted_text_answers=accepted_text_answers,
         explanation=explanation,
     )
     if errors:
@@ -416,8 +449,10 @@ def question_from_form() -> tuple[
             category=category,
             category_name=selected_category.name,
             prompt=prompt,
+            question_type=question_type,
             choices=choices,
-            answer=answer,
+            correct_choice_indices=correct_choice_indices,
+            accepted_text_answers=accepted_text_answers,
             explanation=explanation,
         ),
         (),
