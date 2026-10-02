@@ -7,6 +7,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
+COPY data/categories.json ./data/categories.json
+COPY data/categories.json ./seed/categories.json
 COPY data/questions.json ./data/questions.json
 COPY static ./static
 COPY templates ./templates

@@ -21,6 +21,8 @@ flowchart LR
     F --> R[라우트 계층]
     R --> S[문제 저장소]
     S --> J[(문제 JSON)]
+    R --> C[분야 저장소]
+    C --> K[(분야 JSON)]
     R --> T[Jinja 템플릿]
     T -->|HTML 응답| U
     A[관리자 브라우저] -->|인증 및 관리 요청| R
@@ -36,9 +38,11 @@ flowchart LR
 | `app/__init__.py` | 애플리케이션 팩토리 생성, 경로 설정, 문제 저장소 주입, 블루프린트 등록 |
 | `app/routes.py` | HTTP 요청 처리, 문제 조회, 채점 요청 연결, 템플릿 렌더링 |
 | `app/admin_routes.py` | 관리자 로그인, CSRF 검증, 문제 추가·수정·삭제 요청 처리 |
+| `app/services/category_repository.py` | 분야 JSON 초기화, 조회, 중복 검증 및 추가 저장 |
 | `app/services/question_repository.py` | JSON 로드 및 검증, 분야별 조회, 답안 채점, 문제 변경 저장 |
 | `app/services/login_attempt_tracker.py` | 접속 주소별 로그인 실패 횟수 및 임시 차단 관리 |
 | `data/questions.json` | 객관식 문제와 정답 및 해설 저장 |
+| `data/categories.json` | 기본 분야 ID와 표시 이름 저장 |
 | `templates/` | 공개 화면과 관리자 화면의 HTML 템플릿 |
 | `static/` | 공통 스타일과 문제 JSON 생성 스크립트 |
 | `tests/` | 주요 화면과 채점 흐름에 대한 자동화 테스트 |
@@ -59,7 +63,8 @@ flowchart LR
 | `POST` | `/result` | 제출한 답안을 채점하고 해설 표시 |
 | `GET` | `/question-form` | 문제 데이터 작성 양식 표시 |
 | `GET`, `POST` | `/admin/login` | 관리자 비밀번호 확인 및 세션 시작 |
-| `GET` | `/admin` | 등록된 문제 목록과 관리 작업 표시 |
+| `GET` | `/admin?category={분야}&page={번호}` | 분야별 필터와 페이지가 적용된 문제 목록 및 관리 작업 표시 |
+| `GET`, `POST` | `/admin/categories/new` | 새 분야 입력 및 저장 |
 | `GET`, `POST` | `/admin/questions/new` | 문제 추가 폼 표시 및 저장 |
 | `GET`, `POST` | `/admin/questions/{문제 ID}/edit` | 기존 문제 수정 |
 | `GET`, `POST` | `/admin/questions/{문제 ID}/delete` | 삭제 확인 및 삭제 |
@@ -89,6 +94,8 @@ flowchart LR
 | `answer` | 정수 | 0부터 시작하는 정답 선택지 인덱스 |
 | `explanation` | 문자열 | 채점 후 표시하는 해설 |
 
+`CategoryRepository`는 문제와 독립적으로 분야를 관리한다. 이 구조를 통해 문제가 아직 없는 새 분야도 홈과 관리자 화면에 유지된다. 분야 데이터는 `id`, `name` 필드로 구성하며, 분야 추가 시 ID와 대소문자를 구분하지 않은 이름의 중복을 검사한다.
+
 ## 5. 주요 요청 흐름
 
 ### 문제 풀이와 채점
@@ -116,7 +123,11 @@ sequenceDiagram
 
 관리자는 환경변수에 등록된 비밀번호로 로그인한다. 로그인 성공 여부는 Flask가 서명한 세션 쿠키에 저장되고 30분 후 만료된다. 추가·수정·삭제와 로그아웃 요청은 세션별 CSRF 토큰을 검증한다. 같은 접속 주소에서 5분 안에 로그인에 5번 실패하면 추가 시도를 임시 차단한다.
 
+분야 추가 화면에서 새 ID와 표시 이름을 저장하면 홈, 문제 추가 폼, JSON 작성 양식에 즉시 반영된다. 문제가 없는 분야는 홈에서 `준비 중`으로 표시한다.
+
 문제 추가 화면은 분야별로 `분야-숫자` 형식의 가장 큰 ID를 찾아 다음 번호를 추천한다. 사용자가 추천 ID를 직접 수정한 경우에는 분야를 변경해도 입력값을 덮어쓰지 않는다.
+
+문제 관리 목록은 URL의 `category`, `page` 쿼리로 분야 필터와 페이지 상태를 유지한다. 한 페이지에는 최대 10개 문제를 표시하며, 잘못된 분야는 전체 분야로, 범위를 벗어난 페이지는 가장 가까운 유효 페이지로 보정한다.
 
 문제 변경은 `QuestionRepository`를 통해 즉시 JSON에 반영된다. Docker 환경에서는 `/app/data` 이름 있는 볼륨이 문제 데이터를 유지하므로 컨테이너와 이미지를 다시 만들어도 관리자 변경 내용이 남는다.
 
@@ -130,7 +141,7 @@ Docker 이미지는 `python:3.13-slim`을 기반으로 하며 Gunicorn을 통해
 - 요청 제한 시간: `30초`
 - 실행 사용자: 비루트 사용자 `appuser`
 - 재시작 정책: `unless-stopped`
-- 영속 데이터: `question_data` 이름 있는 볼륨의 `/app/data/questions.json`
+- 영속 데이터: `question_data` 이름 있는 볼륨의 `/app/data/questions.json`, `/app/data/categories.json`
 - 필수 환경변수: `ADMIN_PASSWORD`, `SECRET_KEY`
 
 워커 수는 Cafe24 서버의 1GB RAM 제한을 고려한 값이다. Compose 구성은 호스트의 루프백 주소에만 `8000` 포트를 연결한다. `yangsong.cloud`에서는 운영 서버 앞단의 Nginx 리버스 프록시와 TLS 인증서를 통해 접근한다.
@@ -159,7 +170,7 @@ Docker 이미지는 `python:3.13-slim`을 기반으로 하며 Gunicorn을 통해
 docker compose up --build -d
 ```
 
-현재 자동화 테스트는 공개 문제 풀이와 채점, 관리자 인증 보호, CSRF 거부, 문제 추가·수정·삭제와 JSON 반영을 검증한다. 배포 검증에서는 주요 경로의 HTTP 상태, 관리자 로그인, 잘못된 분야의 `404` 응답, 컨테이너 실행 사용자와 Gunicorn 로그를 함께 확인한다.
+현재 자동화 테스트는 공개 문제 풀이와 채점, 관리자 인증 보호, CSRF 거부, 분야 추가, 문제 추가·수정·삭제와 JSON 반영을 검증한다. 배포 검증에서는 주요 경로의 HTTP 상태, 관리자 로그인, 잘못된 분야의 `404` 응답, 컨테이너 실행 사용자와 Gunicorn 로그를 함께 확인한다.
 
 ## 9. 확장 시 고려 사항
 

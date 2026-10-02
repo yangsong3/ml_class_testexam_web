@@ -18,19 +18,14 @@ from flask import (
 )
 
 from app.services.login_attempt_tracker import LoginAttemptTracker
+from app.services.category_repository import Category, CategoryRepository
 from app.services.question_repository import Question, QuestionRepository
 
 admin = Blueprint("admin", __name__, url_prefix="/admin")
 
-CATEGORIES = (
-    ("basics", "머신러닝 기초"),
-    ("features", "데이터와 피처"),
-    ("numpy", "NumPy"),
-    ("pandas", "pandas"),
-    ("visualization", "데이터 시각화"),
-)
-CATEGORY_NAMES = dict(CATEGORIES)
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,49}$")
+CATEGORY_IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,29}$")
+QUESTIONS_PER_PAGE = 10
 
 
 @dataclass(frozen=True)
@@ -45,6 +40,29 @@ class QuestionFormValues:
     explanation: str
 
 
+@dataclass(frozen=True)
+class QuestionPage:
+    """관리 목록의 한 페이지와 이동 정보를 표현한다."""
+
+    questions: tuple[Question, ...]
+    current_page: int
+    total_pages: int
+    total_items: int
+    start_item: int
+    end_item: int
+    page_numbers: tuple[int, ...]
+
+    @property
+    def has_previous(self) -> bool:
+        """이전 페이지가 있는지 반환한다."""
+        return self.current_page > 1
+
+    @property
+    def has_next(self) -> bool:
+        """다음 페이지가 있는지 반환한다."""
+        return self.current_page < self.total_pages
+
+
 def get_repository() -> QuestionRepository:
     """현재 애플리케이션의 문제 저장소를 반환한다."""
     return current_app.config["QUESTION_REPOSITORY"]
@@ -53,6 +71,46 @@ def get_repository() -> QuestionRepository:
 def get_login_tracker() -> LoginAttemptTracker:
     """현재 애플리케이션의 로그인 실패 추적기를 반환한다."""
     return current_app.config["LOGIN_ATTEMPT_TRACKER"]
+
+
+def get_category_repository() -> CategoryRepository:
+    """현재 애플리케이션의 분야 저장소를 반환한다."""
+    return current_app.config["CATEGORY_REPOSITORY"]
+
+
+def get_category_options() -> tuple[tuple[str, str], ...]:
+    """문제 폼에서 사용할 분야 선택지를 반환한다."""
+    return tuple(
+        (category.identifier, category.name)
+        for category in get_category_repository().all()
+    )
+
+
+def paginate_questions(
+    questions: tuple[Question, ...], page_value: str | None
+) -> QuestionPage:
+    """문제 목록을 유효한 페이지 범위로 나누어 반환한다."""
+    try:
+        requested_page = int(page_value or "1")
+    except ValueError:
+        requested_page = 1
+
+    total_items = len(questions)
+    total_pages = max(1, (total_items + QUESTIONS_PER_PAGE - 1) // QUESTIONS_PER_PAGE)
+    current_page = min(max(requested_page, 1), total_pages)
+    start_index = (current_page - 1) * QUESTIONS_PER_PAGE
+    end_index = min(start_index + QUESTIONS_PER_PAGE, total_items)
+    first_page_number = max(1, current_page - 2)
+    last_page_number = min(total_pages, current_page + 2)
+    return QuestionPage(
+        questions=questions[start_index:end_index],
+        current_page=current_page,
+        total_pages=total_pages,
+        total_items=total_items,
+        start_item=start_index + 1 if total_items else 0,
+        end_item=end_index,
+        page_numbers=tuple(range(first_page_number, last_page_number + 1)),
+    )
 
 
 def admin_required(view: Callable[..., Any]) -> Callable[..., Any]:
@@ -148,9 +206,67 @@ def logout() -> Any:
 @admin.get("")
 @admin_required
 def dashboard() -> str:
-    """전체 문제와 관리 작업을 표시한다."""
-    questions = get_repository().questions_for("all")
-    return render_template("admin/questions.html", questions=questions)
+    """필터링하고 페이지를 나눈 문제 목록과 관리 작업을 표시한다."""
+    repository = get_repository()
+    counts = repository.category_counts()
+    category_items = get_category_repository().all()
+    categories = tuple(
+        {
+            "id": category.identifier,
+            "name": category.name,
+            "count": counts[category.identifier],
+        }
+        for category in category_items
+    )
+    selected_category = request.args.get("category", "all")
+    valid_categories = {category.identifier for category in category_items}
+    if selected_category != "all" and selected_category not in valid_categories:
+        selected_category = "all"
+
+    filtered_questions = repository.questions_for(selected_category)
+    question_page = paginate_questions(filtered_questions, request.args.get("page"))
+    return render_template(
+        "admin/questions.html",
+        questions=question_page.questions,
+        categories=categories,
+        selected_category=selected_category,
+        question_page=question_page,
+        total_question_count=sum(counts.values()),
+    )
+
+
+@admin.route("/categories/new", methods=("GET", "POST"))
+@admin_required
+def create_category() -> str | Any:
+    """새 문제 분야를 입력받아 저장한다."""
+    identifier = ""
+    name = ""
+    errors: list[str] = []
+    if request.method == "POST":
+        identifier = request.form.get("identifier", "").strip()
+        name = request.form.get("name", "").strip()
+        if not CATEGORY_IDENTIFIER_PATTERN.fullmatch(identifier):
+            errors.append("분야 ID는 영문 소문자로 시작하고 영문 소문자, 숫자, 하이픈으로 2~30자여야 합니다.")
+        if not name or len(name) > 50:
+            errors.append("분야 이름은 1~50자로 입력해 주세요.")
+
+        if not errors:
+            try:
+                get_category_repository().add(
+                    Category(identifier=identifier, name=name)
+                )
+            except ValueError as error:
+                errors.append(str(error))
+            else:
+                flash("분야를 추가했습니다.", "success")
+                return redirect(url_for("admin.dashboard"))
+
+    return render_template(
+        "admin/category_form.html",
+        identifier=identifier,
+        name=name,
+        errors=tuple(errors),
+    )
 
 
 @admin.route("/questions/new", methods=("GET", "POST"))
@@ -158,6 +274,7 @@ def dashboard() -> str:
 def create_question() -> str | Any:
     """새 문제를 입력받아 저장한다."""
     repository = get_repository()
+    categories = get_category_options()
     question = None
     errors: tuple[str, ...] = ()
     if request.method == "POST":
@@ -170,16 +287,20 @@ def create_question() -> str | Any:
                 errors = (str(error),)
             else:
                 flash("문제를 추가했습니다.", "success")
-                return redirect(url_for("admin.dashboard"))
+                return redirect(
+                    url_for(
+                        "admin.dashboard", category=submitted_question.category
+                    )
+                )
 
     return render_template(
         "admin/question_form.html",
         page_title="문제 추가",
         question=question,
-        categories=CATEGORIES,
+        categories=categories,
         recommended_identifiers={
             category: repository.next_identifier(category)
-            for category, _ in CATEGORIES
+            for category, _ in categories
         },
         is_create=True,
         errors=errors,
@@ -191,6 +312,7 @@ def create_question() -> str | Any:
 def edit_question(identifier: str) -> str | Any:
     """기존 문제를 수정해 저장한다."""
     repository = get_repository()
+    categories = get_category_options()
     existing_question = repository.find(identifier)
     if existing_question is None:
         abort(404)
@@ -207,13 +329,17 @@ def edit_question(identifier: str) -> str | Any:
                 errors = (str(error.args[0]),)
             else:
                 flash("문제를 수정했습니다.", "success")
-                return redirect(url_for("admin.dashboard"))
+                return redirect(
+                    url_for(
+                        "admin.dashboard", category=submitted_question.category
+                    )
+                )
 
     return render_template(
         "admin/question_form.html",
         page_title="문제 수정",
         question=question,
-        categories=CATEGORIES,
+        categories=categories,
         recommended_identifiers={},
         is_create=False,
         errors=errors,
@@ -235,7 +361,7 @@ def delete_question(identifier: str) -> str | Any:
         except KeyError:
             abort(404)
         flash("문제를 삭제했습니다.", "success")
-        return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("admin.dashboard", category=question.category))
 
     return render_template("admin/question_delete.html", question=question)
 
@@ -256,7 +382,8 @@ def question_from_form() -> tuple[
 
     if not IDENTIFIER_PATTERN.fullmatch(identifier):
         errors.append("문제 ID는 영문 소문자, 숫자, 하이픈으로 3~50자여야 합니다.")
-    if category not in CATEGORY_NAMES:
+    selected_category = get_category_repository().find(category)
+    if selected_category is None:
         errors.append("올바른 분야를 선택해 주세요.")
     if not prompt or len(prompt) > 500:
         errors.append("문제 내용은 1~500자로 입력해 주세요.")
@@ -287,7 +414,7 @@ def question_from_form() -> tuple[
         Question(
             identifier=identifier,
             category=category,
-            category_name=CATEGORY_NAMES[category],
+            category_name=selected_category.name,
             prompt=prompt,
             choices=choices,
             answer=answer,

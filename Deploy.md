@@ -300,7 +300,7 @@ curl --fail --show-error https://yangsong.cloud/
 3. 답안을 제출하면 점수와 해설이 표시된다.
 4. 문제 작성 양식에서 JSON 파일을 내려받을 수 있다.
 5. `/admin`은 로그인하지 않은 사용자를 로그인 화면으로 이동시킨다.
-6. 관리자 로그인 후 문제 추가·수정·삭제가 정상 동작한다.
+6. 관리자 로그인 후 분야 추가와 문제 추가·수정·삭제가 정상 동작한다.
 7. 존재하지 않는 분야는 `404`를 반환한다.
 
 ```bash
@@ -351,14 +351,16 @@ sudo docker image prune
 
 ## 10. 문제 데이터 갱신과 백업
 
-문제 데이터는 Docker의 `question_data` 이름 있는 볼륨에 저장된다. 최초 실행 시 이미지의 `data/questions.json`이 볼륨의 초기 데이터가 되며, 이후 관리 화면에서 변경한 내용은 컨테이너를 재생성하거나 이미지를 갱신해도 유지된다.
+문제와 분야 데이터는 Docker의 `question_data` 이름 있는 볼륨에 저장된다. 새 볼륨은 이미지의 기본 JSON으로 초기화된다. 기존 볼륨에 분야 파일이 없으면 애플리케이션 시작 시 이미지의 기본 분야 데이터로 `/app/data/categories.json`을 생성한다. 이후 관리 화면에서 변경한 내용은 컨테이너를 재생성하거나 이미지를 갱신해도 유지된다. Docker 볼륨의 이 동작은 [Docker 공식 볼륨 문서](https://docs.docker.com/engine/storage/volumes/)에서 확인할 수 있다.
 
 ```bash
 cd /srv/ml_class_mid_exam
 mkdir -p backups
 chmod 700 backups
 sudo docker compose exec -T web sh -c 'cat /app/data/questions.json' > backups/questions-YYYYMMDD-HHMMSS.json
+sudo docker compose exec -T web sh -c 'cat /app/data/categories.json' > backups/categories-YYYYMMDD-HHMMSS.json
 python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
+python3 -m json.tool backups/categories-YYYYMMDD-HHMMSS.json > /dev/null
 ```
 
 `YYYYMMDD-HHMMSS`는 실제 백업 시각으로 바꾼다. 관리자 변경 데이터는 Git 저장소에 자동 반영되지 않으므로 배포 전후와 문제 일괄 변경 전에 별도로 백업한다. `docker compose down -v`는 문제 데이터 볼륨을 삭제하므로 실행하지 않는다.
@@ -367,8 +369,10 @@ python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
 
 ```bash
 python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
+python3 -m json.tool backups/categories-YYYYMMDD-HHMMSS.json > /dev/null
 sudo docker compose stop web
 sudo docker compose run --rm -T web sh -c 'cat > /app/data/questions.json' < backups/questions-YYYYMMDD-HHMMSS.json
+sudo docker compose run --rm -T web sh -c 'cat > /app/data/categories.json' < backups/categories-YYYYMMDD-HHMMSS.json
 sudo docker compose up -d
 curl --fail --show-error http://127.0.0.1:8000/
 ```
@@ -390,7 +394,9 @@ sudo docker compose config --quiet
 
 ```bash
 sudo docker compose exec -T web sh -c 'cat /app/data/questions.json' > /tmp/questions-check.json
+sudo docker compose exec -T web sh -c 'cat /app/data/categories.json' > /tmp/categories-check.json
 python3 -m json.tool /tmp/questions-check.json > /dev/null
+python3 -m json.tool /tmp/categories-check.json > /dev/null
 ```
 
 ### Nginx가 응답하지 않을 때
@@ -425,8 +431,8 @@ curl --fail --show-error http://127.0.0.1:8000/
 - [ ] `.env`에 관리자 비밀번호와 무작위 세션 서명키가 설정되어 있고 권한이 `600`이다.
 - [ ] Compose 포트가 `127.0.0.1:8000:8000`으로 제한되어 있다.
 - [ ] 컨테이너가 `appuser`로 실행된다.
-- [ ] 관리자 로그인과 문제 추가·수정·삭제가 정상 동작한다.
-- [ ] 문제 데이터 볼륨의 백업과 복원 절차를 확인했다.
+- [ ] 관리자 로그인과 분야 추가 및 문제 추가·수정·삭제가 정상 동작한다.
+- [ ] 분야와 문제 데이터 볼륨의 백업 및 복원 절차를 확인했다.
 - [ ] Nginx 설정 문법 검사를 통과한다.
 - [ ] UFW에서 SSH, HTTP, HTTPS만 허용한다.
 - [ ] HTTPS 접속과 인증서 자동 갱신 테스트가 성공한다.

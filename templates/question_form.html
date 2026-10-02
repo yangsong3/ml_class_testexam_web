@@ -9,7 +9,7 @@
 </section>
 <form id="question-builder" class="builder-form">
   <label>문제 ID<input name="id" required placeholder="numpy-004"></label>
-  <label>분야<select name="category" required><option value="basics">머신러닝 기초</option><option value="features">데이터와 피처</option><option value="numpy">NumPy</option><option value="pandas">pandas</option><option value="visualization">데이터 시각화</option></select></label>
+  <label>분야<select name="category" required>{% for category in categories %}<option value="{{ category.identifier }}">{{ category.name }}</option>{% endfor %}</select></label>
   <label>문제 내용<textarea name="prompt" required></textarea></label>
   <label>선택지 1<input name="choice" required></label>
   <label>선택지 2<input name="choice" required></label>

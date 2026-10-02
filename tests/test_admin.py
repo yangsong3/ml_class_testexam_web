@@ -7,11 +7,23 @@ from flask.testing import FlaskClient
 from app import create_app
 
 
-def create_test_app(tmp_path: Path) -> Flask:
-    """격리된 문제 파일을 사용하는 테스트 앱을 생성한다."""
-    source_path = Path(__file__).resolve().parent.parent / "data" / "questions.json"
+def copy_test_data(tmp_path: Path) -> tuple[Path, Path]:
+    """격리된 문제와 분야 데이터 파일을 생성한다."""
+    data_path = Path(__file__).resolve().parent.parent / "data"
     question_path = tmp_path / "questions.json"
-    question_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+    category_path = tmp_path / "categories.json"
+    question_path.write_text(
+        (data_path / "questions.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    category_path.write_text(
+        (data_path / "categories.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return question_path, category_path
+
+
+def create_test_app(tmp_path: Path) -> Flask:
+    """격리된 데이터 파일을 사용하는 테스트 앱을 생성한다."""
+    question_path, category_path = copy_test_data(tmp_path)
     return create_app(
         {
             "TESTING": True,
@@ -19,6 +31,8 @@ def create_test_app(tmp_path: Path) -> Flask:
             "SECRET_KEY": "테스트에서만-사용하는-세션-서명키",
             "SESSION_COOKIE_SECURE": False,
             "QUESTION_PATH": question_path,
+            "CATEGORY_PATH": category_path,
+            "CATEGORY_SEED_PATH": category_path,
         }
     )
 
@@ -77,15 +91,15 @@ def test_admin_requires_login_and_csrf(tmp_path: Path) -> None:
 
 
 def test_admin_rejects_missing_configuration(tmp_path: Path) -> None:
-    source_path = Path(__file__).resolve().parent.parent / "data" / "questions.json"
-    question_path = tmp_path / "questions.json"
-    question_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+    question_path, category_path = copy_test_data(tmp_path)
     app = create_app(
         {
             "TESTING": True,
             "ADMIN_PASSWORD": None,
             "SECRET_KEY": None,
             "QUESTION_PATH": question_path,
+            "CATEGORY_PATH": category_path,
+            "CATEGORY_SEED_PATH": category_path,
         }
     )
 
@@ -115,6 +129,100 @@ def test_admin_temporarily_blocks_repeated_login_failures(tmp_path: Path) -> Non
 
     assert blocked_response.status_code == 429
     assert "5분 후 다시 시도" in blocked_response.get_data(as_text=True)
+
+
+def test_admin_can_add_category(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+
+    form_response = client.get("/admin/categories/new")
+    assert form_response.status_code == 200
+    assert "분야 추가" in form_response.get_data(as_text=True)
+
+    create_response = client.post(
+        "/admin/categories/new",
+        data={
+            "csrf_token": get_csrf_token(client),
+            "identifier": "deep-learning",
+            "name": "딥러닝",
+        },
+        follow_redirects=True,
+    )
+    assert create_response.status_code == 200
+    assert "분야를 추가했습니다." in create_response.get_data(as_text=True)
+
+    question_form_response = client.get("/admin/questions/new")
+    question_form_content = question_form_response.get_data(as_text=True)
+    assert 'value="deep-learning"' in question_form_content
+    assert 'data-recommended-id="deep-learning-001"' in question_form_content
+
+    home_content = client.get("/").get_data(as_text=True)
+    assert "딥러닝" in home_content
+    assert "준비 중" in home_content
+
+    json_form_content = client.get("/question-form").get_data(as_text=True)
+    assert '<option value="deep-learning">딥러닝</option>' in json_form_content
+
+    category_path = Path(app.config["CATEGORY_PATH"])
+    stored_categories = json.loads(category_path.read_text(encoding="utf-8"))
+    assert {"id": "deep-learning", "name": "딥러닝"} in stored_categories
+
+
+def test_category_data_is_initialized_when_volume_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    data_path = Path(__file__).resolve().parent.parent / "data"
+    question_path = tmp_path / "questions.json"
+    question_path.write_text(
+        (data_path / "questions.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    category_path = tmp_path / "volume" / "categories.json"
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "QUESTION_PATH": question_path,
+            "CATEGORY_PATH": category_path,
+            "CATEGORY_SEED_PATH": data_path / "categories.json",
+        }
+    )
+
+    assert category_path.exists()
+    assert app.config["CATEGORY_REPOSITORY"].find("numpy") is not None
+
+
+def test_admin_filters_and_paginates_questions(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+
+    first_page_content = client.get("/admin").get_data(as_text=True)
+    assert first_page_content.count('class="admin-question-card"') == 10
+    assert "basics-001" in first_page_content
+    assert "pandas-002" not in first_page_content
+    assert "필터 결과 15개 중 1~10번째 문제" in first_page_content
+
+    second_page_content = client.get("/admin?page=2").get_data(as_text=True)
+    assert second_page_content.count('class="admin-question-card"') == 5
+    assert "pandas-002" in second_page_content
+    assert 'aria-current="page">2</a>' in second_page_content
+
+    numpy_content = client.get("/admin?category=numpy").get_data(as_text=True)
+    assert numpy_content.count('class="admin-question-card"') == 3
+    assert "numpy-001" in numpy_content
+    assert "basics-001" not in numpy_content
+    assert "필터 결과 3개 중 1~3번째 문제" in numpy_content
+
+    normalized_page_content = client.get("/admin?page=999").get_data(as_text=True)
+    assert "pandas-002" in normalized_page_content
+    assert 'aria-current="page">2</a>' in normalized_page_content
+
+    invalid_query_content = client.get(
+        "/admin?category=unknown&page=invalid"
+    ).get_data(as_text=True)
+    assert invalid_query_content.count('class="admin-question-card"') == 10
+    assert '<option value="all" selected>전체 분야</option>' in invalid_query_content
 
 
 def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:

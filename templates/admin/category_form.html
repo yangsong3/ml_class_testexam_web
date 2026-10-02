@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}분야 추가 | 문제 관리{% endblock %}
+{% block content %}
+<section class="quiz-intro admin-form-heading">
+  <a class="back" href="{{ url_for('admin.dashboard') }}">← 문제 관리로</a>
+  <p class="eyebrow">관리자 전용</p>
+  <h1>분야 추가</h1>
+  <p>새 분야는 홈 화면과 문제 추가 화면에 즉시 반영됩니다.</p>
+</section>
+
+{% if errors %}
+  <div class="notice error" role="alert">
+    <ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
+
+<form method="post" class="builder-form admin-category-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>분야 ID
+    <input name="identifier" required maxlength="30" pattern="[a-z][a-z0-9-]{1,29}" placeholder="deep-learning" value="{{ identifier }}">
+    <small>문제 ID의 접두사로 사용됩니다. 예: <code>deep-learning-001</code></small>
+  </label>
+  <label>분야 이름
+    <input name="name" required maxlength="50" placeholder="딥러닝" value="{{ name }}">
+  </label>
+  <div>
+    <button class="button primary" type="submit">분야 저장</button>
+    <a class="button secondary" href="{{ url_for('admin.dashboard') }}">취소</a>
+  </div>
+</form>
+{% endblock %}

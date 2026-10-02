@@ -89,24 +89,9 @@ class QuestionRepository:
             explanation=raw_question["explanation"],
         )
 
-    def categories(self) -> tuple[dict[str, str | int], ...]:
+    def category_counts(self) -> Counter[str]:
         """분야별 문제 수를 반환한다."""
-        questions = self._load_questions()
-        counts = Counter(question.category for question in questions)
-        names = {question.category: question.category_name for question in questions}
-        return tuple(
-            {"id": category, "name": names[category], "count": count}
-            for category, count in counts.items()
-        )
-
-    def category_name(self, category: str) -> str:
-        """분야 식별자에 해당하는 표시 이름을 반환한다."""
-        if category == "all":
-            return "전체 복습"
-        for item in self.categories():
-            if item["id"] == category:
-                return str(item["name"])
-        return ""
+        return Counter(question.category for question in self._load_questions())
 
     def questions_for(self, category: str) -> tuple[Question, ...]:
         """선택한 분야의 문제를 반환한다."""

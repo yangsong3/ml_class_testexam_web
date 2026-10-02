@@ -2,6 +2,7 @@ from collections.abc import Mapping
 
 from flask import Blueprint, abort, current_app, render_template, request
 
+from app.services.category_repository import CategoryRepository
 from app.services.question_repository import QuestionRepository
 
 quiz = Blueprint("quiz", __name__)
@@ -12,11 +13,21 @@ def get_repository() -> QuestionRepository:
     return current_app.config["QUESTION_REPOSITORY"]
 
 
+def get_category_repository() -> CategoryRepository:
+    """현재 애플리케이션의 분야 저장소를 반환한다."""
+    return current_app.config["CATEGORY_REPOSITORY"]
+
+
 @quiz.get("/")
 def home() -> str:
     """학습 분야 선택 화면을 표시한다."""
     repository = get_repository()
-    return render_template("home.html", categories=repository.categories())
+    counts = repository.category_counts()
+    categories = tuple(
+        {"id": category.identifier, "name": category.name, "count": counts[category.identifier]}
+        for category in get_category_repository().all()
+    )
+    return render_template("home.html", categories=categories)
 
 
 @quiz.get("/quiz")
@@ -24,13 +35,20 @@ def show_quiz() -> str:
     """선택한 분야의 문제를 표시한다."""
     repository = get_repository()
     category = request.args.get("category", "all")
+    if category == "all":
+        category_name = "전체 복습"
+    else:
+        selected_category = get_category_repository().find(category)
+        if selected_category is None:
+            abort(404)
+        category_name = selected_category.name
     questions = repository.questions_for(category)
     if not questions:
         abort(404)
     return render_template(
         "quiz.html",
         category=category,
-        category_name=repository.category_name(category),
+        category_name=category_name,
         questions=questions,
     )
 
@@ -59,4 +77,6 @@ def show_result() -> str:
 @quiz.get("/question-form")
 def question_form() -> str:
     """문제 데이터 작성 양식을 표시한다."""
-    return render_template("question_form.html")
+    return render_template(
+        "question_form.html", categories=get_category_repository().all()
+    )

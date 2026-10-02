@@ -5,9 +5,10 @@
   <div>
     <p class="eyebrow">관리자 전용</p>
     <h1>문제 관리</h1>
-    <p>현재 {{ questions|length }}개의 문제가 등록되어 있습니다.</p>
+    <p>현재 {{ total_question_count }}개의 문제가 등록되어 있습니다.</p>
   </div>
   <div class="admin-heading-actions">
+    <a class="button secondary" href="{{ url_for('admin.create_category') }}">분야 추가</a>
     <a class="button primary" href="{{ url_for('admin.create_question') }}">문제 추가</a>
     <form method="post" action="{{ url_for('admin.logout') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -21,6 +22,35 @@
     <div class="notice {{ category }}" role="status">{{ message }}</div>
   {% endfor %}
 {% endwith %}
+
+<section class="admin-category-section" aria-labelledby="category-heading">
+  <div class="section-heading"><h2 id="category-heading">등록된 분야</h2><span>{{ categories|length }}개</span></div>
+  <div class="admin-category-list">
+    {% for category in categories %}
+      <span class="admin-category-item"><b>{{ category.name }}</b><code>{{ category.id }}</code><small>{{ category.count }}문제</small></span>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="admin-list-controls" aria-label="문제 목록 필터">
+  <form method="get" action="{{ url_for('admin.dashboard') }}">
+    <label for="category-filter">분야</label>
+    <select id="category-filter" name="category">
+      <option value="all" {% if selected_category == 'all' %}selected{% endif %}>전체 분야</option>
+      {% for category in categories %}
+        <option value="{{ category.id }}" {% if selected_category == category.id %}selected{% endif %}>{{ category.name }} ({{ category.count }})</option>
+      {% endfor %}
+    </select>
+    <button class="button primary" type="submit">필터 적용</button>
+  </form>
+  <p>
+    {% if question_page.total_items %}
+      필터 결과 {{ question_page.total_items }}개 중 {{ question_page.start_item }}~{{ question_page.end_item }}번째 문제
+    {% else %}
+      필터 결과가 없습니다.
+    {% endif %}
+  </p>
+</section>
 
 <section class="admin-question-list" aria-label="등록된 문제">
   {% for question in questions %}
@@ -40,4 +70,18 @@
     <div class="empty-state">등록된 문제가 없습니다.</div>
   {% endfor %}
 </section>
+
+{% if question_page.total_pages > 1 %}
+<nav class="pagination" aria-label="문제 목록 페이지">
+  {% if question_page.has_previous %}
+    <a href="{{ url_for('admin.dashboard', category=selected_category, page=question_page.current_page - 1) }}">← 이전</a>
+  {% endif %}
+  {% for page_number in question_page.page_numbers %}
+    <a href="{{ url_for('admin.dashboard', category=selected_category, page=page_number) }}" {% if page_number == question_page.current_page %}aria-current="page"{% endif %}>{{ page_number }}</a>
+  {% endfor %}
+  {% if question_page.has_next %}
+    <a href="{{ url_for('admin.dashboard', category=selected_category, page=question_page.current_page + 1) }}">다음 →</a>
+  {% endif %}
+</nav>
+{% endif %}
 {% endblock %}

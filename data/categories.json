@@ -1,0 +1,7 @@
+[
+  {"id": "basics", "name": "머신러닝 기초"},
+  {"id": "features", "name": "데이터와 피처"},
+  {"id": "numpy", "name": "NumPy"},
+  {"id": "pandas", "name": "pandas"},
+  {"id": "visualization", "name": "데이터 시각화"}
+]

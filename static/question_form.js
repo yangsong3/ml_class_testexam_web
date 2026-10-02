@@ -1,19 +1,12 @@
-const categoryNames = {
-  basics: "머신러닝 기초",
-  features: "데이터와 피처",
-  numpy: "NumPy",
-  pandas: "pandas",
-  visualization: "데이터 시각화",
-};
-
 document.querySelector("#question-builder").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const category = String(form.get("category"));
+  const categorySelect = event.currentTarget.elements.category;
   const question = {
     id: String(form.get("id")),
     category,
-    category_name: categoryNames[category],
+    category_name: categorySelect.options[categorySelect.selectedIndex].text,
     prompt: String(form.get("prompt")),
     choices: form.getAll("choice").map(String),
     answer: Number(form.get("answer")),

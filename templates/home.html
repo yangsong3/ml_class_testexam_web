@@ -10,11 +10,18 @@
   <div class="section-heading"><h2>분야별 학습</h2><span>분야별 3문제</span></div>
   <div class="category-grid">
   {% for item in categories %}
+    {% if item.count > 0 %}
     <a class="category-card" href="{{ url_for('quiz.show_quiz', category=item.id) }}">
       <span class="count">{{ item.count }} 문제</span>
       <h3>{{ item.name }}</h3>
       <span class="arrow">→</span>
     </a>
+    {% else %}
+    <div class="category-card empty-category">
+      <span class="count">준비 중</span>
+      <h3>{{ item.name }}</h3>
+    </div>
+    {% endif %}
   {% endfor %}
   </div>
 </section>

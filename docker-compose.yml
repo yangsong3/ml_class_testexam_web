@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD 환경변수를 설정해야 합니다}
+      CATEGORY_SEED_PATH: /app/seed/categories.json
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 환경변수를 설정해야 합니다}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
     ports:
