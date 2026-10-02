@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}문제 관리 | 머신러닝 중간고사 연습{% endblock %}
+{% block content %}
+<section class="admin-heading">
+  <div>
+    <p class="eyebrow">관리자 전용</p>
+    <h1>문제 관리</h1>
+    <p>현재 {{ questions|length }}개의 문제가 등록되어 있습니다.</p>
+  </div>
+  <div class="admin-heading-actions">
+    <a class="button primary" href="{{ url_for('admin.create_question') }}">문제 추가</a>
+    <form method="post" action="{{ url_for('admin.logout') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="button secondary" type="submit">로그아웃</button>
+    </form>
+  </div>
+</section>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="notice {{ category }}" role="status">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<section class="admin-question-list" aria-label="등록된 문제">
+  {% for question in questions %}
+    <article class="admin-question-card">
+      <div class="admin-question-meta">
+        <span>{{ question.category_name }}</span>
+        <code>{{ question.identifier }}</code>
+      </div>
+      <h2>{{ question.prompt }}</h2>
+      <p>정답: {{ question.choices[question.answer] }}</p>
+      <div class="admin-question-actions">
+        <a class="button secondary" href="{{ url_for('admin.edit_question', identifier=question.identifier) }}">수정</a>
+        <a class="button danger" href="{{ url_for('admin.delete_question', identifier=question.identifier) }}">삭제</a>
+      </div>
+    </article>
+  {% else %}
+    <div class="empty-state">등록된 문제가 없습니다.</div>
+  {% endfor %}
+</section>
+{% endblock %}

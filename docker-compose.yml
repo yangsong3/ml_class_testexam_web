@@ -2,5 +2,14 @@ services:
   web:
     build: .
     restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD 환경변수를 설정해야 합니다}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 환경변수를 설정해야 합니다}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - question_data:/app/data
+
+volumes:
+  question_data:

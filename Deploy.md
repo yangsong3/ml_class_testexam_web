@@ -12,7 +12,7 @@
 - 실행 방식: Docker Compose
 - 외부 연결: Nginx 리버스 프록시와 HTTPS
 
-명령 예시에서 `<서버_공인_IP>`, `<저장소_URL>`, `<관리자_이메일>`은 실제 값으로 바꿔야 한다. 비밀번호, API 토큰과 개인키는 저장소에 기록하지 않는다.
+명령 예시에서 `<서버_공인_IP>`, `<저장소_URL>`, `<관리자_이메일>`은 실제 값으로 바꿔야 한다. 비밀번호, 세션 서명키, API 토큰과 개인키는 저장소에 기록하지 않는다.
 
 ## 2. 배포 구조
 
@@ -21,10 +21,10 @@ flowchart LR
     U[사용자] -->|HTTPS 443| N[Nginx]
     N -->|HTTP 127.0.0.1:8000| G[Gunicorn 컨테이너]
     G --> F[Flask 애플리케이션]
-    F --> J[(questions.json)]
+    F --> J[(Docker 문제 데이터 볼륨)]
 ```
 
-Nginx만 인터넷에 공개하고 Gunicorn의 8000번 포트는 서버 내부에서만 접근하게 한다. 현재 `docker-compose.yml`의 `8000:8000` 설정은 모든 네트워크 인터페이스에 포트를 공개하므로 운영 배포 전에 반드시 루프백 주소로 제한해야 한다.
+Nginx만 인터넷에 공개하고 Gunicorn의 8000번 포트는 서버 내부에서만 접근하게 한다. `docker-compose.yml`은 `127.0.0.1:8000:8000`으로 설정되어 있으므로 외부에서 Gunicorn 포트에 직접 접속할 수 없다.
 
 ## 3. 배포 전 준비
 
@@ -54,7 +54,11 @@ Resolve-DnsName yangsong.cloud
 
 배포할 커밋에서 자동화 테스트와 컨테이너 실행을 먼저 확인한다.
 
+먼저 `.env.example`을 `.env`로 복사하고 로컬 테스트용 관리자 비밀번호와 세션 서명키를 설정한다. `.env`는 Git에서 제외되어 있다.
+
 ```powershell
+Copy-Item .env.example .env
+python -c "import secrets; print(secrets.token_hex(32))"
 .\.venv\Scripts\python.exe -m pytest -q
 docker compose up --build -d
 curl.exe --fail http://127.0.0.1:8000/
@@ -152,23 +156,54 @@ cd /srv/ml_class_mid_exam
 
 비공개 저장소라면 서버 전용 읽기 키 또는 제한된 배포 자격 증명을 사용한다. 개인 계정의 범용 토큰을 서버에 평문으로 저장하지 않는다.
 
+### 관리자 인증 환경변수
+
+프로젝트 루트에서 소유자만 읽을 수 있는 `.env` 파일을 준비한다.
+
+```bash
+cd /srv/ml_class_mid_exam
+umask 077
+touch .env
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+chmod 600 .env
+```
+
+출력된 난수를 `SECRET_KEY`에 사용하고, `.env`를 다음 형식으로 작성한다. 관리자 비밀번호는 12자 이상으로 충분히 길고 다른 서비스에서 사용하지 않은 값으로 정한다.
+
+```dotenv
+ADMIN_PASSWORD=<관리자_비밀번호>
+SECRET_KEY=<생성한_64자리_난수>
+SESSION_COOKIE_SECURE=1
+```
+
+실제 값을 명령줄 인수나 셸 기록에 남기지 않는다. `.env`를 저장소에 추가하거나 다른 사용자에게 읽기 권한을 주지 않는다. `SECRET_KEY`를 변경하면 기존 관리자 세션은 모두 무효화된다.
+
 ### 운영 포트 제한
 
-배포 전에 `docker-compose.yml`의 포트 설정을 다음과 같이 변경하고 저장소에 반영한다.
+`docker-compose.yml`의 포트와 관리자 환경변수, 문제 데이터 볼륨 설정이 다음과 같은지 확인한다.
 
 ```yaml
 services:
   web:
     build: .
     restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD 환경변수를 설정해야 합니다}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 환경변수를 설정해야 합니다}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - question_data:/app/data
+
+volumes:
+  question_data:
 ```
 
 구성 파일이 유효한지 확인한다.
 
 ```bash
-sudo docker compose config
+sudo docker compose config --quiet
 ```
 
 ### 이미지 빌드와 실행
@@ -264,7 +299,9 @@ curl --fail --show-error https://yangsong.cloud/
 2. 분야별 문제 화면으로 이동한다.
 3. 답안을 제출하면 점수와 해설이 표시된다.
 4. 문제 작성 양식에서 JSON 파일을 내려받을 수 있다.
-5. 존재하지 않는 분야는 `404`를 반환한다.
+5. `/admin`은 로그인하지 않은 사용자를 로그인 화면으로 이동시킨다.
+6. 관리자 로그인 후 문제 추가·수정·삭제가 정상 동작한다.
+7. 존재하지 않는 분야는 `404`를 반환한다.
 
 ```bash
 curl --fail --show-error --head https://yangsong.cloud/
@@ -314,16 +351,27 @@ sudo docker image prune
 
 ## 10. 문제 데이터 갱신과 백업
 
-문제 데이터는 `data/questions.json`에 있으며 Docker 이미지에 복사된다. 호스트 파일만 수정해도 실행 중인 컨테이너에는 반영되지 않으므로 변경 후 이미지를 다시 빌드해야 한다.
+문제 데이터는 Docker의 `question_data` 이름 있는 볼륨에 저장된다. 최초 실행 시 이미지의 `data/questions.json`이 볼륨의 초기 데이터가 되며, 이후 관리 화면에서 변경한 내용은 컨테이너를 재생성하거나 이미지를 갱신해도 유지된다.
 
 ```bash
 cd /srv/ml_class_mid_exam
-python3 -m json.tool data/questions.json > /dev/null
-sudo docker compose up --build -d
-curl --fail --show-error http://127.0.0.1:8000/
+mkdir -p backups
+chmod 700 backups
+sudo docker compose exec -T web sh -c 'cat /app/data/questions.json' > backups/questions-YYYYMMDD-HHMMSS.json
+python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
 ```
 
-문제 데이터는 Git 저장소가 기본 백업 역할을 한다. 운영 서버에서 직접 수정해야 한다면 먼저 날짜가 포함된 별도 파일로 복사하고, 검증이 끝난 변경은 저장소에도 반영한다.
+`YYYYMMDD-HHMMSS`는 실제 백업 시각으로 바꾼다. 관리자 변경 데이터는 Git 저장소에 자동 반영되지 않으므로 배포 전후와 문제 일괄 변경 전에 별도로 백업한다. `docker compose down -v`는 문제 데이터 볼륨을 삭제하므로 실행하지 않는다.
+
+백업을 복원할 때는 먼저 JSON 형식을 검사하고 웹 컨테이너를 중지한다.
+
+```bash
+python3 -m json.tool backups/questions-YYYYMMDD-HHMMSS.json > /dev/null
+sudo docker compose stop web
+sudo docker compose run --rm -T web sh -c 'cat > /app/data/questions.json' < backups/questions-YYYYMMDD-HHMMSS.json
+sudo docker compose up -d
+curl --fail --show-error http://127.0.0.1:8000/
+```
 
 사용자 답안과 점수는 서버에 저장되지 않으므로 별도의 사용자 데이터 백업은 없다.
 
@@ -335,13 +383,14 @@ curl --fail --show-error http://127.0.0.1:8000/
 cd /srv/ml_class_mid_exam
 sudo docker compose ps --all
 sudo docker compose logs --no-color --tail 200 web
-sudo docker compose config
+sudo docker compose config --quiet
 ```
 
-문제 JSON 오류가 의심되면 다음 명령으로 형식을 확인한다.
+문제 JSON 오류가 의심되면 볼륨에 저장된 파일을 복사해 형식을 확인한다.
 
 ```bash
-python3 -m json.tool data/questions.json > /dev/null
+sudo docker compose exec -T web sh -c 'cat /app/data/questions.json' > /tmp/questions-check.json
+python3 -m json.tool /tmp/questions-check.json > /dev/null
 ```
 
 ### Nginx가 응답하지 않을 때
@@ -373,8 +422,11 @@ curl --fail --show-error http://127.0.0.1:8000/
 
 - [ ] DNS `A` 레코드가 서버 공인 IP를 가리킨다.
 - [ ] Docker Engine과 Compose 플러그인이 정상 동작한다.
+- [ ] `.env`에 관리자 비밀번호와 무작위 세션 서명키가 설정되어 있고 권한이 `600`이다.
 - [ ] Compose 포트가 `127.0.0.1:8000:8000`으로 제한되어 있다.
 - [ ] 컨테이너가 `appuser`로 실행된다.
+- [ ] 관리자 로그인과 문제 추가·수정·삭제가 정상 동작한다.
+- [ ] 문제 데이터 볼륨의 백업과 복원 절차를 확인했다.
 - [ ] Nginx 설정 문법 검사를 통과한다.
 - [ ] UFW에서 SSH, HTTP, HTTPS만 허용한다.
 - [ ] HTTPS 접속과 인증서 자동 갱신 테스트가 성공한다.
@@ -386,6 +438,8 @@ curl --fail --show-error http://127.0.0.1:8000/
 
 - [Docker Engine Ubuntu 설치](https://docs.docker.com/engine/install/ubuntu/)
 - [Docker Compose 플러그인 설치](https://docs.docker.com/compose/install/linux/)
+- [Docker Compose 환경변수 보간](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/)
 - [Nginx 프록시 모듈](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
 - [Certbot 공식 문서](https://eff-certbot.readthedocs.io/en/stable/)
 - [Ubuntu 방화벽 안내](https://ubuntu.com/server/docs/how-to/security/firewalls/)
+- [Flask 보안 고려사항](https://flask.palletsprojects.com/en/stable/web-security/)

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}관리자 로그인 | 머신러닝 중간고사 연습{% endblock %}
+{% block content %}
+<section class="admin-auth">
+  <p class="eyebrow">관리자 전용</p>
+  <h1>문제 관리</h1>
+  {% if configuration_error %}
+    <div class="notice error" role="alert">
+      관리자 인증 설정이 없거나 비밀번호가 너무 짧습니다. 서버의 <code>ADMIN_PASSWORD</code>와 <code>SECRET_KEY</code> 환경변수를 설정해 주세요. 비밀번호는 12자 이상이어야 합니다.
+    </div>
+  {% elif blocked %}
+    <div class="notice error" role="alert">로그인 시도가 너무 많습니다. 5분 후 다시 시도해 주세요.</div>
+  {% else %}
+    <p>등록된 관리자 비밀번호를 입력해 주세요.</p>
+    {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" class="admin-login-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>비밀번호<input type="password" name="password" required autofocus autocomplete="current-password"></label>
+      <button class="button primary" type="submit">로그인</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

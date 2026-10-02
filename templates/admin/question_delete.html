@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}문제 삭제 | 문제 관리{% endblock %}
+{% block content %}
+<section class="delete-confirmation">
+  <a class="back" href="{{ url_for('admin.dashboard') }}">← 문제 목록으로</a>
+  <p class="eyebrow">삭제 확인</p>
+  <h1>이 문제를 삭제할까요?</h1>
+  <div class="admin-question-card">
+    <div class="admin-question-meta">
+      <span>{{ question.category_name }}</span>
+      <code>{{ question.identifier }}</code>
+    </div>
+    <h2>{{ question.prompt }}</h2>
+  </div>
+  <p class="delete-warning">삭제한 문제는 관리 화면에서 복구할 수 없습니다.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="button danger" type="submit">문제 삭제</button>
+    <a class="button secondary" href="{{ url_for('admin.dashboard') }}">취소</a>
+  </form>
+</section>
+{% endblock %}

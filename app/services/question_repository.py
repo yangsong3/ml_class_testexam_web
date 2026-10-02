@@ -1,8 +1,10 @@
 import json
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class QuestionRepository:
 
     def __init__(self, question_path: Path) -> None:
         self._question_path = question_path
+        self._write_lock = Lock()
 
     def _load_questions(self) -> tuple[Question, ...]:
         try:
@@ -111,6 +114,95 @@ class QuestionRepository:
         if category == "all":
             return questions
         return tuple(question for question in questions if question.category == category)
+
+    def find(self, identifier: str) -> Question | None:
+        """식별자에 해당하는 문제를 반환한다."""
+        return next(
+            (
+                question
+                for question in self._load_questions()
+                if question.identifier == identifier
+            ),
+            None,
+        )
+
+    def next_identifier(self, category: str) -> str:
+        """분야에서 사용 중인 숫자 ID 다음 값을 반환한다."""
+        identifier_pattern = re.compile(rf"^{re.escape(category)}-(\d+)$")
+        numbers = [
+            int(match.group(1))
+            for question in self._load_questions()
+            if (match := identifier_pattern.fullmatch(question.identifier))
+        ]
+        next_number = max(numbers, default=0) + 1
+        return f"{category}-{next_number:03d}"
+
+    def add(self, question: Question) -> None:
+        """새 문제를 저장한다."""
+        with self._write_lock:
+            questions = list(self._load_questions())
+            if any(item.identifier == question.identifier for item in questions):
+                raise ValueError("이미 사용 중인 문제 ID입니다.")
+            questions.append(question)
+            self._write_questions(questions)
+
+    def update(self, original_identifier: str, question: Question) -> None:
+        """기존 문제를 수정한다."""
+        with self._write_lock:
+            questions = list(self._load_questions())
+            target_index = next(
+                (
+                    index
+                    for index, item in enumerate(questions)
+                    if item.identifier == original_identifier
+                ),
+                None,
+            )
+            if target_index is None:
+                raise KeyError("수정할 문제를 찾을 수 없습니다.")
+            if any(
+                item.identifier == question.identifier
+                and item.identifier != original_identifier
+                for item in questions
+            ):
+                raise ValueError("이미 사용 중인 문제 ID입니다.")
+            questions[target_index] = question
+            self._write_questions(questions)
+
+    def delete(self, identifier: str) -> None:
+        """기존 문제를 삭제한다."""
+        with self._write_lock:
+            questions = list(self._load_questions())
+            remaining = [
+                question
+                for question in questions
+                if question.identifier != identifier
+            ]
+            if len(remaining) == len(questions):
+                raise KeyError("삭제할 문제를 찾을 수 없습니다.")
+            self._write_questions(remaining)
+
+    def _write_questions(self, questions: Sequence[Question]) -> None:
+        raw_questions = [
+            {
+                "id": question.identifier,
+                "category": question.category,
+                "category_name": question.category_name,
+                "prompt": question.prompt,
+                "choices": list(question.choices),
+                "answer": question.answer,
+                "explanation": question.explanation,
+            }
+            for question in questions
+        ]
+        temporary_path = self._question_path.with_suffix(
+            f"{self._question_path.suffix}.tmp"
+        )
+        temporary_path.write_text(
+            f"{json.dumps(raw_questions, ensure_ascii=False, indent=2)}\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(self._question_path)
 
     @staticmethod
     def grade(
