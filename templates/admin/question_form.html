@@ -1,4 +1,20 @@
 {% extends "base.html" %}
+{% macro math_assistant(field_name) %}
+  <div class="math-assistant" data-math-assistant>
+    <div class="math-toolbar" role="toolbar" aria-label="{{ field_name }} 수식 입력 도구">
+      <button type="button" data-math-action="inline">인라인</button>
+      <button type="button" data-math-action="display">별도 줄</button>
+      <button type="button" data-math-action="fraction">분수</button>
+      <button type="button" data-math-action="power">제곱</button>
+      <button type="button" data-math-action="root">루트</button>
+      <button type="button" data-math-action="sum">합</button>
+    </div>
+    <div class="math-preview" aria-label="{{ field_name }} 실시간 미리보기">
+      <small>실시간 미리보기</small>
+      <div data-math-preview>입력 내용이 여기에 표시됩니다.</div>
+    </div>
+  </div>
+{% endmacro %}
 {% block title %}{{ page_title }} | 문제 관리{% endblock %}
 {% block content %}
 <section class="quiz-intro admin-form-heading">
@@ -13,7 +29,7 @@
   </div>
 {% endif %}
 
-<form method="post" class="builder-form admin-question-form" data-question-type-controls {% if is_create %}data-id-recommendations{% endif %}>
+<form method="post" enctype="multipart/form-data" class="builder-form admin-question-form" data-question-type-controls {% if is_create %}data-id-recommendations{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label>문제 ID
     {% set initial_category = question.category if question else categories[0][0] %}
@@ -28,7 +44,23 @@
       {% endfor %}
     </select>
   </label>
-  <label>문제 내용<textarea name="prompt" required maxlength="500">{{ question.prompt if question else '' }}</textarea></label>
+  <div class="math-editor" data-math-editor>
+    <label>문제 내용
+      <textarea name="prompt" required maxlength="500" data-math-input>{{ question.prompt if question else '' }}</textarea>
+      <small>텍스트를 선택한 뒤 수식 버튼을 누르면 해당 텍스트를 수식으로 감쌉니다.</small>
+    </label>
+    {{ math_assistant('문제 내용') }}
+  </div>
+  <label>문제 이미지
+    <input type="file" name="image" accept="image/png,image/jpeg,image/webp">
+    <small>선택 사항 · PNG, JPEG, WebP · 최대 4MB · 최대 2천만 픽셀</small>
+  </label>
+  {% if question and question.image_digest %}
+    <div class="admin-image-preview">
+      <img src="{{ url_for('quiz.question_image', identifier=stored_identifier, v=question.image_digest) }}" alt="현재 문제 이미지">
+      <label class="inline-check"><input type="checkbox" name="remove_image" value="1"> 기존 이미지 삭제</label>
+    </div>
+  {% endif %}
   {% set selected_type = question.question_type if question else 'multiple_choice' %}
   <label>문제 유형
     <select name="question_type" required>
@@ -38,7 +70,23 @@
   </label>
   <section class="question-type-fields" data-choice-fields>
     {% for index in range(4) %}
-      <label>선택지 {{ index + 1 }}<input name="choice_{{ index }}" required maxlength="200" value="{{ question.choices[index] if question and index < question.choices|length else '' }}"></label>
+      <div class="choice-editor">
+        <div class="math-editor" data-math-editor>
+          <label>선택지 {{ index + 1 }}<input type="text" name="choice_{{ index }}" required maxlength="200" value="{{ question.choices[index] if question and index < question.choices|length else '' }}" data-math-input></label>
+          {{ math_assistant('선택지 ' ~ (index + 1)) }}
+        </div>
+        <label>선택지 {{ index + 1 }} 이미지
+          <input type="file" name="choice_image_{{ index }}" accept="image/png,image/jpeg,image/webp">
+          <small>선택 사항 · PNG, JPEG, WebP · 이미지당 최대 4MB</small>
+        </label>
+        {% set choice_digest = question.choice_image_digests[index] if question and index < question.choice_image_digests|length else none %}
+        {% if choice_digest %}
+          <div class="admin-choice-image-preview">
+            <img src="{{ url_for('quiz.choice_image', identifier=stored_identifier, position=index, v=choice_digest) }}" alt="현재 선택지 {{ index + 1 }} 이미지">
+            <label class="inline-check"><input type="checkbox" name="remove_choice_image_{{ index }}" value="1"> 기존 이미지 삭제</label>
+          </div>
+        {% endif %}
+      </div>
     {% endfor %}
     <fieldset class="answer-options">
       <legend>정답 선택</legend>
@@ -54,7 +102,13 @@
       <small>허용할 정답 표현을 한 줄에 하나씩 입력합니다. 채점할 때 앞뒤 공백과 영문 대소문자는 구분하지 않습니다.</small>
     </label>
   </section>
-  <label>해설<textarea name="explanation" required maxlength="1000">{{ question.explanation if question else '' }}</textarea></label>
+  <div class="math-editor" data-math-editor>
+    <label>해설
+      <textarea name="explanation" required maxlength="1000" data-math-input>{{ question.explanation if question else '' }}</textarea>
+      <small>문제 내용과 같은 수식 버튼과 LaTeX 표기를 사용할 수 있습니다.</small>
+    </label>
+    {{ math_assistant('해설') }}
+  </div>
   <div>
     <button class="button primary" type="submit">저장</button>
     <a class="button secondary" href="{{ url_for('admin.dashboard') }}">취소</a>

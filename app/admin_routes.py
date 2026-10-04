@@ -20,6 +20,7 @@ from flask import (
 from app.services.login_attempt_tracker import LoginAttemptTracker
 from app.services.category_repository import Category
 from app.services.database_repositories import CategoryRepository, QuestionRepository
+from app.services.image_processor import QuestionImage, process_question_image
 from app.services.question_repository import (
     MULTIPLE_CHOICE,
     SHORT_ANSWER,
@@ -31,6 +32,7 @@ admin = Blueprint("admin", __name__, url_prefix="/admin")
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,49}$")
 CATEGORY_IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,29}$")
 QUESTIONS_PER_PAGE = 10
+CHOICE_COUNT = 4
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class QuestionFormValues:
     correct_choice_indices: tuple[int, ...]
     accepted_text_answers: tuple[str, ...]
     explanation: str
+    image_digest: str | None
+    choice_image_digests: tuple[str | None, ...]
 
 
 @dataclass(frozen=True)
@@ -285,11 +289,16 @@ def create_question() -> str | Any:
     question = None
     errors: tuple[str, ...] = ()
     if request.method == "POST":
-        submitted_question, errors, form_values = question_from_form()
+        submitted_question, form_errors, form_values = question_from_form()
+        image, image_errors = image_from_form()
+        choice_images, choice_image_errors = choice_images_from_form(
+            form_values.question_type
+        )
+        errors = (*form_errors, *image_errors, *choice_image_errors)
         question = form_values
-        if submitted_question is not None:
+        if submitted_question is not None and not errors:
             try:
-                repository.add(submitted_question)
+                repository.add(submitted_question, image, choice_images)
             except ValueError as error:
                 errors = (str(error),)
             else:
@@ -310,6 +319,7 @@ def create_question() -> str | Any:
             for category, _ in categories
         },
         is_create=True,
+        stored_identifier=None,
         errors=errors,
     )
 
@@ -327,11 +337,40 @@ def edit_question(identifier: str) -> str | Any:
     question = existing_question
     errors: tuple[str, ...] = ()
     if request.method == "POST":
-        submitted_question, errors, form_values = question_from_form()
+        submitted_question, form_errors, form_values = question_from_form(
+            existing_question.image_digest,
+            existing_question.choice_image_digests,
+        )
+        image, image_errors = image_from_form()
+        choice_images, choice_image_errors = choice_images_from_form(
+            form_values.question_type
+        )
+        remove_image = request.form.get("remove_image") == "1"
+        remove_choice_images = frozenset(
+            index
+            for index in range(CHOICE_COUNT)
+            if request.form.get(f"remove_choice_image_{index}") == "1"
+        )
+        errors = (*form_errors, *image_errors, *choice_image_errors)
+        if image is not None and remove_image:
+            errors = (*errors, "새 이미지 등록과 기존 이미지 삭제를 동시에 선택할 수 없습니다.")
+        for index, choice_image in enumerate(choice_images):
+            if choice_image is not None and index in remove_choice_images:
+                errors = (
+                    *errors,
+                    f"선택지 {index + 1}의 새 이미지 등록과 기존 이미지 삭제를 동시에 선택할 수 없습니다.",
+                )
         question = form_values
-        if submitted_question is not None:
+        if submitted_question is not None and not errors:
             try:
-                repository.update(identifier, submitted_question)
+                repository.update(
+                    identifier,
+                    submitted_question,
+                    image=image,
+                    remove_image=remove_image,
+                    choice_images=choice_images,
+                    remove_choice_images=remove_choice_images,
+                )
             except (KeyError, ValueError) as error:
                 errors = (str(error.args[0]),)
             else:
@@ -349,6 +388,7 @@ def edit_question(identifier: str) -> str | Any:
         categories=categories,
         recommended_identifiers={},
         is_create=False,
+        stored_identifier=identifier,
         errors=errors,
     )
 
@@ -373,7 +413,41 @@ def delete_question(identifier: str) -> str | Any:
     return render_template("admin/question_delete.html", question=question)
 
 
-def question_from_form() -> tuple[
+def image_from_form() -> tuple[QuestionImage | None, tuple[str, ...]]:
+    """관리 폼의 선택적 이미지 파일을 검증한다."""
+    try:
+        return process_question_image(request.files.get("image")), ()
+    except ValueError as error:
+        return None, (str(error),)
+
+
+def choice_images_from_form(
+    question_type: str,
+) -> tuple[tuple[QuestionImage | None, ...], tuple[str, ...]]:
+    """관리 폼의 선택지별 이미지 파일을 검증한다."""
+    uploads = tuple(
+        request.files.get(f"choice_image_{index}") for index in range(CHOICE_COUNT)
+    )
+    if question_type != MULTIPLE_CHOICE:
+        has_upload = any(upload is not None and upload.filename for upload in uploads)
+        errors = ("선택지 이미지는 객관식 문제에만 등록할 수 있습니다.",) if has_upload else ()
+        return tuple(None for _ in range(CHOICE_COUNT)), errors
+
+    images: list[QuestionImage | None] = []
+    errors: list[str] = []
+    for index, upload in enumerate(uploads):
+        try:
+            images.append(process_question_image(upload))
+        except ValueError as error:
+            images.append(None)
+            errors.append(f"선택지 {index + 1}: {error}")
+    return tuple(images), tuple(errors)
+
+
+def question_from_form(
+    existing_image_digest: str | None = None,
+    existing_choice_image_digests: tuple[str | None, ...] = (),
+) -> tuple[
     Question | None, tuple[str, ...], QuestionFormValues
 ]:
     """관리 폼 입력을 검증하고 문제 객체로 변환한다."""
@@ -382,7 +456,8 @@ def question_from_form() -> tuple[
     prompt = request.form.get("prompt", "").strip()
     question_type = request.form.get("question_type", "").strip()
     submitted_choices = tuple(
-        request.form.get(f"choice_{index}", "").strip() for index in range(4)
+        request.form.get(f"choice_{index}", "").strip()
+        for index in range(CHOICE_COUNT)
     )
     explanation = request.form.get("explanation", "").strip()
     errors: list[str] = []
@@ -439,6 +514,8 @@ def question_from_form() -> tuple[
         correct_choice_indices=correct_choice_indices,
         accepted_text_answers=accepted_text_answers,
         explanation=explanation,
+        image_digest=existing_image_digest,
+        choice_image_digests=existing_choice_image_digests,
     )
     if errors:
         return None, tuple(errors), form_values
@@ -454,6 +531,8 @@ def question_from_form() -> tuple[
             correct_choice_indices=correct_choice_indices,
             accepted_text_answers=accepted_text_answers,
             explanation=explanation,
+            image_digest=existing_image_digest,
+            choice_image_digests=existing_choice_image_digests,
         ),
         (),
         form_values,

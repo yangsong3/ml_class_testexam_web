@@ -1,7 +1,9 @@
 from pathlib import Path
+from io import BytesIO
 
 from flask import Flask
 from flask.testing import FlaskClient
+from PIL import Image
 from werkzeug.datastructures import MultiDict
 
 from app import create_app
@@ -80,6 +82,14 @@ def question_form_data(csrf_token: str, prompt: str = "새 문제") -> dict[str,
         "answers": "2",
         "explanation": "테스트 해설입니다.",
     }
+
+
+def png_upload() -> tuple[BytesIO, str]:
+    """테스트용 PNG 업로드 값을 생성한다."""
+    image_data = BytesIO()
+    Image.new("RGB", (16, 12), "white").save(image_data, format="PNG")
+    image_data.seek(0)
+    return image_data, "formula.png"
 
 
 def test_admin_requires_login_and_csrf(tmp_path: Path) -> None:
@@ -236,6 +246,9 @@ def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:
     assert "문제 추가" in form_content
     assert 'value="basics-004"' in form_content
     assert 'data-recommended-id="numpy-004"' in form_content
+    assert form_content.count("data-math-editor") == 6
+    assert form_content.count('data-math-action="fraction"') == 6
+    assert "실시간 미리보기" in form_content
 
     create_response = client.post(
         "/admin/questions/new",
@@ -357,3 +370,147 @@ def test_short_answer_and_multiple_correct_answers(tmp_path: Path) -> None:
     assert stored_short_answer.accepted_text_answers == ("NumPy", "numpy")
     assert stored_multiple_choice is not None
     assert stored_multiple_choice.correct_choice_indices == (0, 2)
+
+
+def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    csrf_token = get_csrf_token(client)
+    form_data: dict[str, object] = question_form_data(
+        csrf_token, prompt=r"다음 식 \(x^2 + 1\)을 확인하세요."
+    )
+    form_data["identifier"] = "basics-999"
+    form_data["category"] = "basics"
+    form_data["image"] = png_upload()
+
+    create_response = client.post("/admin/questions/new", data=form_data)
+
+    assert create_response.status_code == 302
+    stored_question = app.config["QUESTION_REPOSITORY"].find("basics-999")
+    assert stored_question is not None
+    assert stored_question.image_digest is not None
+
+    image_response = client.get("/questions/basics-999/image")
+    assert image_response.status_code == 200
+    assert image_response.content_type == "image/png"
+    assert image_response.data.startswith(b"\x89PNG")
+    assert image_response.headers["ETag"]
+    cached_response = client.get(
+        "/questions/basics-999/image",
+        headers={"If-None-Match": image_response.headers["ETag"]},
+    )
+    assert cached_response.status_code == 304
+
+    quiz_content = client.get("/quiz?category=basics").get_data(as_text=True)
+    assert r"\(x^2 + 1\)" in quiz_content
+    assert "mathjax@4.0.0/tex-chtml.js" in quiz_content
+    assert "/questions/basics-999/image" in quiz_content
+
+    retained_digest = stored_question.image_digest
+    edit_data: dict[str, object] = question_form_data(
+        get_csrf_token(client), prompt=r"수정된 식 \(x^2 + 1\)"
+    )
+    edit_data.update(
+        {
+            "identifier": "basics-999",
+            "category": "basics",
+        }
+    )
+    edit_response = client.post(
+        "/admin/questions/basics-999/edit", data=edit_data
+    )
+
+    assert edit_response.status_code == 302
+    assert (
+        app.config["QUESTION_REPOSITORY"].find("basics-999").image_digest
+        == retained_digest
+    )
+
+    edit_data["csrf_token"] = get_csrf_token(client)
+    edit_data["remove_image"] = "1"
+    remove_response = client.post(
+        "/admin/questions/basics-999/edit", data=edit_data
+    )
+
+    assert remove_response.status_code == 302
+    assert app.config["QUESTION_REPOSITORY"].find(
+        "basics-999"
+    ).image_digest is None
+    assert client.get("/questions/basics-999/image").status_code == 404
+
+
+def test_admin_can_store_render_and_remove_choice_images(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    form_data: dict[str, object] = question_form_data(get_csrf_token(client))
+    form_data["identifier"] = "numpy-995"
+    form_data["choice_image_0"] = png_upload()
+    form_data["choice_image_2"] = png_upload()
+
+    create_response = client.post("/admin/questions/new", data=form_data)
+
+    assert create_response.status_code == 302
+    stored_question = app.config["QUESTION_REPOSITORY"].find("numpy-995")
+    assert stored_question is not None
+    assert stored_question.choice_image_digests[0] is not None
+    assert stored_question.choice_image_digests[1] is None
+    assert stored_question.choice_image_digests[2] is not None
+
+    image_response = client.get("/questions/numpy-995/choices/0/image")
+    assert image_response.status_code == 200
+    assert image_response.content_type == "image/png"
+    assert image_response.headers["ETag"]
+    assert client.get("/questions/numpy-995/choices/1/image").status_code == 404
+
+    quiz_content = client.get("/quiz?category=numpy").get_data(as_text=True)
+    assert "/questions/numpy-995/choices/0/image" in quiz_content
+    assert "1번 선택지 참고 이미지" in quiz_content
+
+    edit_content = client.get(
+        "/admin/questions/numpy-995/edit"
+    ).get_data(as_text=True)
+    assert "현재 선택지 1 이미지" in edit_content
+    retained_digest = stored_question.choice_image_digests[2]
+
+    edit_data: dict[str, object] = question_form_data(get_csrf_token(client))
+    edit_data["identifier"] = "numpy-995"
+    edit_data["remove_choice_image_0"] = "1"
+    edit_response = client.post(
+        "/admin/questions/numpy-995/edit", data=edit_data
+    )
+
+    assert edit_response.status_code == 302
+    updated_question = app.config["QUESTION_REPOSITORY"].find("numpy-995")
+    assert updated_question is not None
+    assert updated_question.choice_image_digests[0] is None
+    assert updated_question.choice_image_digests[2] == retained_digest
+    assert client.get("/questions/numpy-995/choices/0/image").status_code == 404
+
+
+def test_admin_rejects_non_image_upload(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    form_data: dict[str, object] = question_form_data(get_csrf_token(client))
+    form_data["identifier"] = "numpy-996"
+    form_data["image"] = (BytesIO(b"<svg></svg>"), "unsafe.svg")
+
+    response = client.post("/admin/questions/new", data=form_data)
+
+    assert response.status_code == 200
+    assert "올바른 이미지 파일이 아닙니다." in response.get_data(as_text=True)
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-996") is None
+
+    form_data = question_form_data(get_csrf_token(client))
+    form_data["identifier"] = "numpy-995"
+    form_data["choice_image_1"] = (BytesIO(b"<svg></svg>"), "unsafe.svg")
+
+    choice_response = client.post("/admin/questions/new", data=form_data)
+
+    assert choice_response.status_code == 200
+    assert "선택지 2: 올바른 이미지 파일이 아닙니다." in choice_response.get_data(
+        as_text=True
+    )
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-995") is None

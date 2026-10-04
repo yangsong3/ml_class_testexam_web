@@ -28,6 +28,7 @@ def create_app(test_config: Mapping[str, object] | None = None) -> Flask:
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
         PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),
+        MAX_CONTENT_LENGTH=21 * 1024 * 1024,
         MAX_FORM_MEMORY_SIZE=64 * 1024,
     )
     if test_config is not None:

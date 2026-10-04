@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.models import CategoryModel, ChoiceModel, QuestionModel, ShortAnswerModel
 from app.services.category_repository import Category
+from app.services.image_processor import QuestionImage
 from app.services.question_repository import (
     GradeResult,
     JsonQuestionRepository,
@@ -98,6 +99,8 @@ class QuestionRepository:
                 answer.text for answer in model.short_answers
             ),
             explanation=model.explanation,
+            image_digest=model.image_digest,
+            choice_image_digests=tuple(choice.image_digest for choice in model.choices),
         )
 
     def category_counts(self) -> Counter[str]:
@@ -143,13 +146,20 @@ class QuestionRepository:
             ]
         return f"{category}-{max(numbers, default=0) + 1:03d}"
 
-    def add(self, question: Question) -> None:
+    def add(
+        self,
+        question: Question,
+        image: QuestionImage | None = None,
+        choice_images: tuple[QuestionImage | None, ...] = (),
+    ) -> None:
         """새 문제를 저장한다."""
         with self._session_factory() as session:
             if session.get(QuestionModel, question.identifier) is not None:
                 raise ValueError("이미 사용 중인 문제 ID입니다.")
             last_order = session.scalar(select(func.max(QuestionModel.sort_order)))
-            model = self._build_model(question, (last_order or 0) + 1)
+            model = self._build_model(
+                question, (last_order or 0) + 1, image, choice_images
+            )
             session.add(model)
             try:
                 session.commit()
@@ -157,7 +167,15 @@ class QuestionRepository:
                 session.rollback()
                 raise ValueError("문제를 저장할 수 없습니다.") from error
 
-    def update(self, original_identifier: str, question: Question) -> None:
+    def update(
+        self,
+        original_identifier: str,
+        question: Question,
+        image: QuestionImage | None = None,
+        remove_image: bool = False,
+        choice_images: tuple[QuestionImage | None, ...] = (),
+        remove_choice_images: frozenset[int] = frozenset(),
+    ) -> None:
         """기존 문제를 수정한다."""
         with self._session_factory() as session:
             existing = session.get(QuestionModel, original_identifier)
@@ -168,9 +186,47 @@ class QuestionRepository:
                 raise ValueError("이미 사용 중인 문제 ID입니다.")
 
             sort_order = existing.sort_order
+            stored_image = image
+            if stored_image is None and not remove_image and existing.image_data:
+                stored_image = QuestionImage(
+                    data=existing.image_data,
+                    mime_type=existing.image_mime_type or "application/octet-stream",
+                    digest=existing.image_digest or "",
+                )
+            stored_choice_images: list[QuestionImage | None] = []
+            existing_choices = {choice.position: choice for choice in existing.choices}
+            for position in range(len(question.choices)):
+                uploaded_image = (
+                    choice_images[position] if position < len(choice_images) else None
+                )
+                existing_choice = existing_choices.get(position)
+                if uploaded_image is not None:
+                    stored_choice_images.append(uploaded_image)
+                elif (
+                    position not in remove_choice_images
+                    and existing_choice is not None
+                    and existing_choice.image_data is not None
+                ):
+                    stored_choice_images.append(
+                        QuestionImage(
+                            data=existing_choice.image_data,
+                            mime_type=existing_choice.image_mime_type
+                            or "application/octet-stream",
+                            digest=existing_choice.image_digest or "",
+                        )
+                    )
+                else:
+                    stored_choice_images.append(None)
             session.delete(existing)
             session.flush()
-            session.add(self._build_model(question, sort_order))
+            session.add(
+                self._build_model(
+                    question,
+                    sort_order,
+                    stored_image,
+                    tuple(stored_choice_images),
+                )
+            )
             try:
                 session.commit()
             except IntegrityError as error:
@@ -186,8 +242,52 @@ class QuestionRepository:
             session.delete(model)
             session.commit()
 
+    def get_image(self, identifier: str) -> QuestionImage | None:
+        """문제에 등록된 이미지 데이터를 반환한다."""
+        with self._session_factory() as session:
+            model = session.get(QuestionModel, identifier)
+            if (
+                model is None
+                or model.image_data is None
+                or model.image_mime_type is None
+                or model.image_digest is None
+            ):
+                return None
+            return QuestionImage(
+                data=model.image_data,
+                mime_type=model.image_mime_type,
+                digest=model.image_digest,
+            )
+
+    def get_choice_image(self, identifier: str, position: int) -> QuestionImage | None:
+        """객관식 선택지에 등록된 이미지 데이터를 반환한다."""
+        with self._session_factory() as session:
+            model = session.scalar(
+                select(ChoiceModel).where(
+                    ChoiceModel.question_id == identifier,
+                    ChoiceModel.position == position,
+                )
+            )
+            if (
+                model is None
+                or model.image_data is None
+                or model.image_mime_type is None
+                or model.image_digest is None
+            ):
+                return None
+            return QuestionImage(
+                data=model.image_data,
+                mime_type=model.image_mime_type,
+                digest=model.image_digest,
+            )
+
     @staticmethod
-    def _build_model(question: Question, sort_order: int) -> QuestionModel:
+    def _build_model(
+        question: Question,
+        sort_order: int,
+        image: QuestionImage | None = None,
+        choice_images: tuple[QuestionImage | None, ...] = (),
+    ) -> QuestionModel:
         """도메인 문제를 데이터베이스 모델로 변환한다."""
         model = QuestionModel(
             identifier=question.identifier,
@@ -196,15 +296,23 @@ class QuestionRepository:
             question_type=question.question_type,
             explanation=question.explanation,
             sort_order=sort_order,
+            image_data=image.data if image else None,
+            image_mime_type=image.mime_type if image else None,
+            image_digest=image.digest if image else None,
         )
-        model.choices = [
-            ChoiceModel(
-                position=index,
-                text=choice,
-                is_correct=index in question.correct_choice_indices,
+        model.choices = []
+        for index, choice in enumerate(question.choices):
+            choice_image = choice_images[index] if index < len(choice_images) else None
+            model.choices.append(
+                ChoiceModel(
+                    position=index,
+                    text=choice,
+                    is_correct=index in question.correct_choice_indices,
+                    image_data=choice_image.data if choice_image else None,
+                    image_mime_type=choice_image.mime_type if choice_image else None,
+                    image_digest=choice_image.digest if choice_image else None,
+                )
             )
-            for index, choice in enumerate(question.choices)
-        ]
         model.short_answers = [
             ShortAnswerModel(position=index, text=answer)
             for index, answer in enumerate(question.accepted_text_answers)

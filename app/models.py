@@ -6,6 +6,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     UniqueConstraint,
     func,
@@ -37,6 +38,12 @@ class QuestionModel(Base):
             "question_type IN ('multiple_choice', 'short_answer')",
             name="ck_questions_type",
         ),
+        CheckConstraint(
+            "(image_data IS NULL AND image_mime_type IS NULL AND image_digest IS NULL) "
+            "OR (image_data IS NOT NULL AND image_mime_type IS NOT NULL "
+            "AND image_digest IS NOT NULL)",
+            name="ck_questions_image_complete",
+        ),
     )
 
     identifier: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -48,6 +55,9 @@ class QuestionModel(Base):
     prompt: Mapped[str] = mapped_column(String(500), nullable=False)
     question_type: Mapped[str] = mapped_column(String(20), nullable=False)
     explanation: Mapped[str] = mapped_column(String(1000), nullable=False)
+    image_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    image_mime_type: Mapped[str | None] = mapped_column(String(50))
+    image_digest: Mapped[str | None] = mapped_column(String(64))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
     category: Mapped[CategoryModel] = relationship(back_populates="questions")
     choices: Mapped[list[ChoiceModel]] = relationship(
@@ -68,6 +78,12 @@ class ChoiceModel(Base):
     __tablename__ = "question_choices"
     __table_args__ = (
         UniqueConstraint("question_id", "position", name="uq_choice_position"),
+        CheckConstraint(
+            "(image_data IS NULL AND image_mime_type IS NULL AND image_digest IS NULL) "
+            "OR (image_data IS NOT NULL AND image_mime_type IS NOT NULL "
+            "AND image_digest IS NOT NULL)",
+            name="ck_question_choices_image_complete",
+        ),
     )
 
     identifier: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -77,6 +93,9 @@ class ChoiceModel(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(String(200), nullable=False)
     is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    image_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    image_mime_type: Mapped[str | None] = mapped_column(String(50))
+    image_digest: Mapped[str | None] = mapped_column(String(64))
     question: Mapped[QuestionModel] = relationship(back_populates="choices")
 
 

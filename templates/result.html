@@ -12,6 +12,9 @@
   <article class="answer-card {{ 'correct' if result.is_correct else 'incorrect' }}">
     <p class="status">{{ '정답' if result.is_correct else '오답' }}</p>
     <h2>{{ loop.index }}. {{ result.question.prompt }}</h2>
+    {% if result.question.image_digest %}
+      <img class="question-image" src="{{ url_for('quiz.question_image', identifier=result.question.identifier, v=result.question.image_digest) }}" alt="{{ loop.index }}번 문제 참고 이미지" loading="lazy">
+    {% endif %}
     <p>내 답: {{ result.submitted_answer_text }}</p>
     <p>정답: <strong>{{ result.question.correct_answer_text }}</strong></p>
     <div class="explanation"><b>해설</b><br>{{ result.question.explanation }}</div>

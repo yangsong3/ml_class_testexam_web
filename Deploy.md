@@ -248,7 +248,7 @@ server {
     listen [::]:80;
     server_name yangsong.cloud;
 
-    client_max_body_size 1m;
+    client_max_body_size 21m;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -262,6 +262,8 @@ server {
     }
 }
 ```
+
+문제 이미지 한 개와 선택지 이미지 네 개를 한 요청에서 등록할 수 있도록 Nginx와 애플리케이션의 요청 크기 제한을 모두 21MB로 맞춘다. 각 이미지 파일 자체는 애플리케이션에서 4MB 이하로 별도 검증한다.
 
 `www.yangsong.cloud`도 사용할 경우 `server_name`을 다음과 같이 작성하고 인증서 발급 명령에도 도메인을 추가한다.
 
@@ -315,7 +317,9 @@ curl --fail --show-error https://yangsong.cloud/
 4. 문제 작성 양식에서 JSON 파일을 내려받을 수 있다.
 5. `/admin`은 로그인하지 않은 사용자를 로그인 화면으로 이동시킨다.
 6. 관리자 로그인 후 분야 추가와 문제 추가·수정·삭제가 정상 동작한다.
-7. 존재하지 않는 분야는 `404`를 반환한다.
+7. PNG, JPEG 또는 WebP 문제·선택지 이미지의 등록·교체·삭제와 표시가 정상 동작한다.
+8. 문제·선택지·해설의 수식 버튼과 실시간 미리보기가 동작하고 저장한 LaTeX가 MathJax로 표시된다.
+9. 존재하지 않는 분야는 `404`를 반환한다.
 
 ```bash
 curl --fail --show-error --head https://yangsong.cloud/
@@ -366,7 +370,7 @@ sudo docker image prune
 
 ## 10. 데이터 이전과 백업
 
-최초 기동 시 Alembic이 스키마를 생성하고 `app.json_importer`가 빈 데이터베이스에 기존 JSON을 한 번만 가져온다. 원본 우선순위는 프로젝트의 `migration/`, 기존 `question_data` 볼륨, 이미지 기본 데이터 순서다. 각 위치에 `categories.json`과 `questions.json`이 모두 있어야 사용한다. 데이터베이스에 분야나 문제가 하나라도 있으면 가져오기를 건너뛰므로 재배포가 운영 데이터를 덮어쓰지 않는다.
+최초 기동 시 Alembic이 스키마를 생성하고 `app.json_importer`가 빈 데이터베이스에 기존 JSON을 한 번만 가져온다. 원본 우선순위는 프로젝트의 `migration/`, 기존 `question_data` 볼륨, Docker 이미지에 포함된 기본 JSON 순서다. 각 위치에 `categories.json`과 `questions.json`이 모두 있어야 사용한다. 데이터베이스에 분야나 문제가 하나라도 있으면 가져오기를 건너뛰므로 재배포가 운영 데이터를 덮어쓰지 않는다.
 
 로컬에서 추출한 최신 데이터를 새 서버로 옮길 때는 최초 `docker compose up` 전에 두 파일을 서버 프로젝트의 `migration/`에 전송한다.
 
@@ -374,7 +378,7 @@ sudo docker image prune
 scp migration/categories.json migration/questions.json <서버_사용자>@<서버_공인_IP>:/srv/ml_class_mid_exam/migration/
 ```
 
-문제와 분야는 `postgres_data` 볼륨에 저장한다. 다음 명령으로 PostgreSQL 사용자 정의 형식 백업을 생성한다.
+문제, 분야와 문제·선택지 이미지 바이트는 모두 `postgres_data` 볼륨에 저장한다. 따라서 다음 PostgreSQL 백업에 이미지도 함께 포함된다.
 
 ```bash
 cd /srv/ml_class_mid_exam
@@ -450,6 +454,7 @@ curl --fail --show-error http://127.0.0.1:8000/
 - [ ] Compose 포트가 `127.0.0.1:8000:8000`으로 제한되어 있다.
 - [ ] 컨테이너가 `appuser`로 실행된다.
 - [ ] 관리자 로그인과 분야 추가 및 문제 추가·수정·삭제가 정상 동작한다.
+- [ ] 문제·선택지 이미지 업로드와 수식 버튼·실시간 미리보기·LaTeX 표시가 정상 동작한다.
 - [ ] `db` 상태가 healthy이고 `migrate` 서비스가 종료 코드 0이다.
 - [ ] PostgreSQL 백업 및 복원 절차를 확인했다.
 - [ ] Nginx 설정 문법 검사를 통과한다.

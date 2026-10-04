@@ -24,6 +24,8 @@ class Question:
     correct_choice_indices: tuple[int, ...]
     accepted_text_answers: tuple[str, ...]
     explanation: str
+    image_digest: str | None = None
+    choice_image_digests: tuple[str | None, ...] = ()
 
     @property
     def is_short_answer(self) -> bool:
@@ -145,6 +147,8 @@ class JsonQuestionRepository:
             correct_choice_indices=correct_choice_indices,
             accepted_text_answers=accepted_text_answers,
             explanation=raw_question["explanation"],
+            image_digest=None,
+            choice_image_digests=tuple(None for _ in choices),
         )
 
     def category_counts(self) -> Counter[str]:

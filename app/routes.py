@@ -1,4 +1,4 @@
-from flask import Blueprint, abort, current_app, render_template, request
+from flask import Blueprint, Response, abort, current_app, render_template, request
 
 from app.services.database_repositories import CategoryRepository, QuestionRepository
 
@@ -69,6 +69,32 @@ def show_result() -> str:
         correct_count=correct_count,
         total_count=len(results),
     )
+
+
+@quiz.get("/questions/<identifier>/image")
+def question_image(identifier: str) -> Response:
+    """문제에 등록된 이미지를 캐시 가능한 응답으로 반환한다."""
+    image = get_repository().get_image(identifier)
+    if image is None:
+        abort(404)
+    response = Response(image.data, mimetype=image.mime_type)
+    response.set_etag(image.digest)
+    response.cache_control.public = True
+    response.cache_control.max_age = 86_400
+    return response.make_conditional(request)
+
+
+@quiz.get("/questions/<identifier>/choices/<int:position>/image")
+def choice_image(identifier: str, position: int) -> Response:
+    """객관식 선택지 이미지를 캐시 가능한 응답으로 반환한다."""
+    image = get_repository().get_choice_image(identifier, position)
+    if image is None:
+        abort(404)
+    response = Response(image.data, mimetype=image.mime_type)
+    response.set_etag(image.digest)
+    response.cache_control.public = True
+    response.cache_control.max_age = 86_400
+    return response.make_conditional(request)
 
 
 @quiz.get("/question-form")

@@ -12,6 +12,9 @@
   {% for question in questions %}
   <fieldset class="question-card">
     <legend><span>{{ loop.index }}</span>{{ question.prompt }}</legend>
+    {% if question.image_digest %}
+      <img class="question-image" src="{{ url_for('quiz.question_image', identifier=question.identifier, v=question.image_digest) }}" alt="{{ loop.index }}번 문제 참고 이미지" loading="lazy">
+    {% endif %}
     {% if question.is_short_answer %}
       <div class="short-answer-field">
         <label for="answer-{{ question.identifier }}">주관식 답안</label>
@@ -21,7 +24,13 @@
       <div class="choices">
         {% if question.correct_choice_indices|length > 1 %}<p class="answer-hint">복수 정답 문제입니다. 정답을 모두 선택하세요.</p>{% endif %}
         {% for choice in question.choices %}
-        <label><input type="{{ 'checkbox' if question.correct_choice_indices|length > 1 else 'radio' }}" name="answer_{{ question.identifier }}" value="{{ loop.index0 }}"> <b>{{ '①②③④⑤'[loop.index0] }}</b> {{ choice }}</label>
+        {% set choice_index = loop.index0 %}
+        <label class="choice-option">
+          <span><input type="{{ 'checkbox' if question.correct_choice_indices|length > 1 else 'radio' }}" name="answer_{{ question.identifier }}" value="{{ choice_index }}"> <b>{{ '①②③④⑤'[choice_index] }}</b> {{ choice }}</span>
+          {% if choice_index < question.choice_image_digests|length and question.choice_image_digests[choice_index] %}
+            <img class="choice-image" src="{{ url_for('quiz.choice_image', identifier=question.identifier, position=choice_index, v=question.choice_image_digests[choice_index]) }}" alt="{{ loop.index }}번 선택지 참고 이미지" loading="lazy">
+          {% endif %}
+        </label>
         {% endfor %}
       </div>
     {% endif %}
