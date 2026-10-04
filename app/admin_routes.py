@@ -21,6 +21,10 @@ from app.services.login_attempt_tracker import LoginAttemptTracker
 from app.services.category_repository import Category
 from app.services.database_repositories import CategoryRepository, QuestionRepository
 from app.services.image_processor import QuestionImage, process_question_image
+from app.services.question_document import (
+    MAX_CONTENT_IMAGES,
+    validate_question_document,
+)
 from app.services.question_repository import (
     MULTIPLE_CHOICE,
     SHORT_ANSWER,
@@ -49,6 +53,9 @@ class QuestionFormValues:
     explanation: str
     image_digest: str | None
     choice_image_digests: tuple[str | None, ...]
+    prompt_document: str | None
+    content_image_digests: tuple[str | None, ...]
+    document_image_slots: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -290,15 +297,21 @@ def create_question() -> str | Any:
     errors: tuple[str, ...] = ()
     if request.method == "POST":
         submitted_question, form_errors, form_values = question_from_form()
-        image, image_errors = image_from_form()
+        content_images, image_errors = content_images_from_form()
         choice_images, choice_image_errors = choice_images_from_form(
             form_values.question_type
         )
         errors = (*form_errors, *image_errors, *choice_image_errors)
+        errors = (*errors, *document_image_errors(form_values, content_images))
         question = form_values
         if submitted_question is not None and not errors:
             try:
-                repository.add(submitted_question, image, choice_images)
+                repository.add(
+                    submitted_question,
+                    content_images[0],
+                    choice_images,
+                    content_images[1:],
+                )
             except ValueError as error:
                 errors = (str(error),)
             else:
@@ -340,36 +353,53 @@ def edit_question(identifier: str) -> str | Any:
         submitted_question, form_errors, form_values = question_from_form(
             existing_question.image_digest,
             existing_question.choice_image_digests,
+            existing_question.prompt_document,
+            existing_question.content_image_digests,
         )
-        image, image_errors = image_from_form()
+        content_images, image_errors = content_images_from_form()
         choice_images, choice_image_errors = choice_images_from_form(
             form_values.question_type
         )
-        remove_image = request.form.get("remove_image") == "1"
+        remove_content_images = removed_content_image_slots_from_form()
+        remove_image = 0 in remove_content_images
         remove_choice_images = frozenset(
             index
             for index in range(CHOICE_COUNT)
             if request.form.get(f"remove_choice_image_{index}") == "1"
         )
         errors = (*form_errors, *image_errors, *choice_image_errors)
-        if image is not None and remove_image:
-            errors = (*errors, "새 이미지 등록과 기존 이미지 삭제를 동시에 선택할 수 없습니다.")
+        for slot, content_image in enumerate(content_images):
+            if content_image is not None and slot in remove_content_images:
+                errors = (
+                    *errors,
+                    f"문제 이미지 {slot + 1}의 등록과 삭제를 동시에 선택할 수 없습니다.",
+                )
         for index, choice_image in enumerate(choice_images):
             if choice_image is not None and index in remove_choice_images:
                 errors = (
                     *errors,
                     f"선택지 {index + 1}의 새 이미지 등록과 기존 이미지 삭제를 동시에 선택할 수 없습니다.",
                 )
+        errors = (
+            *errors,
+            *document_image_errors(
+                form_values,
+                content_images,
+                remove_content_images,
+            ),
+        )
         question = form_values
         if submitted_question is not None and not errors:
             try:
                 repository.update(
                     identifier,
                     submitted_question,
-                    image=image,
+                    image=content_images[0],
                     remove_image=remove_image,
                     choice_images=choice_images,
                     remove_choice_images=remove_choice_images,
+                    additional_images=content_images[1:],
+                    remove_content_images=remove_content_images,
                 )
             except (KeyError, ValueError) as error:
                 errors = (str(error.args[0]),)
@@ -413,12 +443,61 @@ def delete_question(identifier: str) -> str | Any:
     return render_template("admin/question_delete.html", question=question)
 
 
-def image_from_form() -> tuple[QuestionImage | None, tuple[str, ...]]:
-    """관리 폼의 선택적 이미지 파일을 검증한다."""
-    try:
-        return process_question_image(request.files.get("image")), ()
-    except ValueError as error:
-        return None, (str(error),)
+def content_images_from_form() -> tuple[
+    tuple[QuestionImage | None, ...], tuple[str, ...]
+]:
+    """관리 폼의 문제 본문 이미지 파일을 슬롯별로 검증한다."""
+    images: list[QuestionImage | None] = []
+    errors: list[str] = []
+    for slot in range(MAX_CONTENT_IMAGES):
+        upload = request.files.get(f"content_image_{slot}")
+        if slot == 0 and (upload is None or not upload.filename):
+            upload = request.files.get("image")
+        try:
+            images.append(process_question_image(upload))
+        except ValueError as error:
+            images.append(None)
+            errors.append(f"문제 이미지 {slot + 1}: {error}")
+    return tuple(images), tuple(errors)
+
+
+def removed_content_image_slots_from_form() -> frozenset[int]:
+    """관리 폼에서 삭제한 문제 이미지 슬롯을 반환한다."""
+    slots = {
+        int(value)
+        for value in request.form.getlist("remove_content_images")
+        if value.isdigit() and int(value) in range(MAX_CONTENT_IMAGES)
+    }
+    if request.form.get("remove_image") == "1":
+        slots.add(0)
+    return frozenset(slots)
+
+
+def document_image_errors(
+    form_values: QuestionFormValues,
+    uploaded_images: tuple[QuestionImage | None, ...],
+    removed_slots: frozenset[int] = frozenset(),
+) -> tuple[str, ...]:
+    """본문에 배치한 이미지와 실제 저장할 이미지가 일치하는지 확인한다."""
+    available_slots = {
+        slot
+        for slot in range(MAX_CONTENT_IMAGES)
+        if uploaded_images[slot] is not None
+        or (
+            slot < len(form_values.content_image_digests)
+            and form_values.content_image_digests[slot] is not None
+            and slot not in removed_slots
+        )
+    }
+    document_slots = set(form_values.document_image_slots)
+    if document_slots - available_slots:
+        return (
+            "본문에 배치된 문제 이미지 파일이 없습니다. "
+            "오류 후 다시 표시된 화면에서는 이미지를 다시 선택해 주세요.",
+        )
+    if available_slots - document_slots:
+        return ("선택한 문제 이미지를 본문에 배치하거나 취소해 주세요.",)
+    return ()
 
 
 def choice_images_from_form(
@@ -447,6 +526,8 @@ def choice_images_from_form(
 def question_from_form(
     existing_image_digest: str | None = None,
     existing_choice_image_digests: tuple[str | None, ...] = (),
+    existing_prompt_document: str | None = None,
+    existing_content_image_digests: tuple[str | None, ...] = (),
 ) -> tuple[
     Question | None, tuple[str, ...], QuestionFormValues
 ]:
@@ -454,6 +535,7 @@ def question_from_form(
     identifier = request.form.get("identifier", "").strip()
     category = request.form.get("category", "").strip()
     prompt = request.form.get("prompt", "").strip()
+    raw_prompt_document = request.form.get("prompt_document", "")
     question_type = request.form.get("question_type", "").strip()
     submitted_choices = tuple(
         request.form.get(f"choice_{index}", "").strip()
@@ -467,8 +549,13 @@ def question_from_form(
     selected_category = get_category_repository().find(category)
     if selected_category is None:
         errors.append("올바른 분야를 선택해 주세요.")
-    if not prompt or len(prompt) > 500:
-        errors.append("문제 내용은 1~500자로 입력해 주세요.")
+    try:
+        prompt_document = validate_question_document(raw_prompt_document, prompt)
+    except ValueError as error:
+        errors.append(str(error))
+        prompt_document = validate_question_document("", prompt[:500] or "문제 내용")
+    else:
+        prompt = prompt_document.plain_text
     if not explanation or len(explanation) > 1000:
         errors.append("해설은 1~1000자로 입력해 주세요.")
 
@@ -516,6 +603,12 @@ def question_from_form(
         explanation=explanation,
         image_digest=existing_image_digest,
         choice_image_digests=existing_choice_image_digests,
+        prompt_document=prompt_document.json_data or existing_prompt_document,
+        content_image_digests=(
+            existing_content_image_digests
+            or (existing_image_digest, None, None, None, None)
+        ),
+        document_image_slots=prompt_document.image_slots,
     )
     if errors:
         return None, tuple(errors), form_values
@@ -533,6 +626,10 @@ def question_from_form(
             explanation=explanation,
             image_digest=existing_image_digest,
             choice_image_digests=existing_choice_image_digests,
+            prompt_document=prompt_document.json_data,
+            additional_image_digests=tuple(
+                (existing_content_image_digests or (None,) * MAX_CONTENT_IMAGES)[1:]
+            ),
         ),
         (),
         form_values,

@@ -1,4 +1,4 @@
-from flask import Blueprint, Response, abort, current_app, render_template, request
+from flask import Blueprint, Response, abort, current_app, render_template, request, send_file
 
 from app.services.database_repositories import CategoryRepository, QuestionRepository
 
@@ -77,11 +77,13 @@ def question_image(identifier: str) -> Response:
     image = get_repository().get_image(identifier)
     if image is None:
         abort(404)
-    response = Response(image.data, mimetype=image.mime_type)
-    response.set_etag(image.digest)
-    response.cache_control.public = True
-    response.cache_control.max_age = 86_400
-    return response.make_conditional(request)
+    return send_file(
+        image.path,
+        mimetype=image.mime_type,
+        conditional=True,
+        etag=image.digest,
+        max_age=86_400,
+    )
 
 
 @quiz.get("/questions/<identifier>/choices/<int:position>/image")
@@ -90,11 +92,28 @@ def choice_image(identifier: str, position: int) -> Response:
     image = get_repository().get_choice_image(identifier, position)
     if image is None:
         abort(404)
-    response = Response(image.data, mimetype=image.mime_type)
-    response.set_etag(image.digest)
-    response.cache_control.public = True
-    response.cache_control.max_age = 86_400
-    return response.make_conditional(request)
+    return send_file(
+        image.path,
+        mimetype=image.mime_type,
+        conditional=True,
+        etag=image.digest,
+        max_age=86_400,
+    )
+
+
+@quiz.get("/questions/<identifier>/content-images/<int:slot>")
+def content_image(identifier: str, slot: int) -> Response:
+    """문제 본문 이미지 슬롯을 캐시 가능한 응답으로 반환한다."""
+    image = get_repository().get_content_image(identifier, slot)
+    if image is None:
+        abort(404)
+    return send_file(
+        image.path,
+        mimetype=image.mime_type,
+        conditional=True,
+        etag=image.digest,
+        max_age=86_400,
+    )
 
 
 @quiz.get("/question-form")

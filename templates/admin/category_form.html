@@ -17,7 +17,7 @@
 <form method="post" class="builder-form admin-category-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label>분야 ID
-    <input name="identifier" required maxlength="30" pattern="[a-z][a-z0-9-]{1,29}" placeholder="deep-learning" value="{{ identifier }}">
+    <input name="identifier" required maxlength="30" pattern="[a-z][a-z0-9\-]{1,29}" placeholder="deep-learning" value="{{ identifier }}">
     <small>문제 ID의 접두사로 사용됩니다. 예: <code>deep-learning-001</code></small>
   </label>
   <label>분야 이름

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.core.css">{% endblock %}
 {% block title %}{{ category_name }} | 머신러닝 중간고사 연습{% endblock %}
 {% block content %}
 <section class="quiz-intro">
@@ -11,9 +12,17 @@
   <input type="hidden" name="category" value="{{ category }}">
   {% for question in questions %}
   <fieldset class="question-card">
-    <legend><span>{{ loop.index }}</span>{{ question.prompt }}</legend>
+    <legend><span>{{ loop.index }}</span><span class="visually-hidden">번 문제</span></legend>
+    {% if question.prompt_document %}
+      <div class="question-document" data-question-document data-document="{{ question.prompt_document }}"
+           {% for digest in question.content_image_digests %}{% if digest %}data-image-{{ loop.index0 }}="{{ url_for('quiz.content_image', identifier=question.identifier, slot=loop.index0, v=digest) }}"{% endif %}{% endfor %}>
+        <div class="question-document-fallback">{{ question.prompt }}</div>
+      </div>
+    {% else %}
+      <div class="question-prompt">{{ question.prompt }}</div>
     {% if question.image_digest %}
       <img class="question-image" src="{{ url_for('quiz.question_image', identifier=question.identifier, v=question.image_digest) }}" alt="{{ loop.index }}번 문제 참고 이미지" loading="lazy">
+    {% endif %}
     {% endif %}
     {% if question.is_short_answer %}
       <div class="short-answer-field">
@@ -38,4 +47,8 @@
   {% endfor %}
   <button class="button primary" type="submit">채점하고 해설 보기</button>
 </form>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+<script src="{{ url_for('static', filename='question_document.js') }}"></script>
 {% endblock %}

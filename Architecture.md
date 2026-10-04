@@ -21,6 +21,7 @@ flowchart LR
     F --> R[라우트 계층]
     R --> S[SQLAlchemy 저장소]
     S --> P[(PostgreSQL)]
+    R --> I[(image_uploads 볼륨)]
     R --> T[Jinja 템플릿]
     T -->|HTML 응답| U
     A[관리자 브라우저] -->|인증 및 관리 요청| R
@@ -42,6 +43,8 @@ flowchart LR
 | `app/services/category_repository.py` | 분야 도메인 객체와 이전 JSON 판독 지원 |
 | `app/services/question_repository.py` | 문제 도메인 객체, 채점과 이전 JSON 판독 지원 |
 | `app/services/image_processor.py` | 업로드 이미지 검증과 메타데이터 제거 재인코딩 |
+| `app/services/image_storage.py` | 검증된 이미지의 파일 저장, 안전한 경로 해석과 삭제 |
+| `app/image_migrator.py` | 기존 PostgreSQL 이미지 바이트를 영속 파일 볼륨으로 이전 |
 | `app/json_importer.py` | 기존 JSON을 빈 데이터베이스에 한 번만 이전 |
 | `app/services/login_attempt_tracker.py` | 접속 주소별 로그인 실패 횟수 및 임시 차단 관리 |
 | `data/questions.json` | 새 환경을 위한 기본 문제 이전 원본 |
@@ -66,6 +69,7 @@ flowchart LR
 | `GET` | `/quiz?category={분야}` | 선택한 분야 또는 전체 문제 표시 |
 | `POST` | `/result` | 제출한 답안을 채점하고 해설 표시 |
 | `GET` | `/questions/{문제 ID}/image` | 문제 이미지를 ETag 캐시와 함께 반환 |
+| `GET` | `/questions/{문제 ID}/content-images/{슬롯}` | 본문에 배치한 최대 5개 이미지를 ETag 캐시와 함께 반환 |
 | `GET` | `/questions/{문제 ID}/choices/{순서}/image` | 객관식 선택지 이미지를 ETag 캐시와 함께 반환 |
 | `GET` | `/question-form` | 문제 데이터 작성 양식 표시 |
 | `GET`, `POST` | `/admin/login` | 관리자 비밀번호 확인 및 세션 시작 |
@@ -92,17 +96,22 @@ flowchart LR
 | 테이블 | 주요 필드 | 설명 |
 | --- | --- | --- |
 | `categories` | `identifier`, `name`, `sort_order` | 분야와 표시 순서 |
-| `questions` | `identifier`, `category_id`, `question_type`, `prompt`, `explanation`, 이미지 데이터·MIME·해시, `sort_order` | 문제 공통 정보와 선택적 이미지 |
-| `question_choices` | `question_id`, `position`, `text`, `is_correct`, 이미지 데이터·MIME·해시 | 객관식 선택지, 복수 정답 여부와 선택적 이미지 |
+| `questions` | `identifier`, `category_id`, `question_type`, `prompt`, `prompt_document`, `explanation`, 첫 이미지 상대 경로·MIME·해시, `sort_order` | 문제 공통 정보, Quill Delta 문서와 첫 이미지 참조 |
+| `question_choices` | `question_id`, `position`, `text`, `is_correct`, 이미지 상대 경로·MIME·해시 | 객관식 선택지, 복수 정답 여부와 선택적 이미지 참조 |
+| `question_content_images` | `question_id`, `slot`, 이미지 상대 경로·MIME·해시 | 문제 본문의 두 번째부터 다섯 번째 이미지 참조 |
 | `short_answers` | `question_id`, `position`, `text` | 허용할 주관식 정답 표현 |
 
 기존 `type` 없는 데이터와 정수 `answer` 필드는 단일정답 객관식으로 계속 읽을 수 있다. 새로 저장하는 데이터는 `type`, `answers` 형식을 사용한다. 객관식 복수정답은 선택한 답의 집합이 정확히 일치해야 정답이며, 주관식은 앞뒤 공백과 영문 대소문자를 무시하고 허용 정답 중 하나와 일치하는지 채점한다.
 
 `CategoryRepository`는 문제와 독립적으로 분야를 관리한다. 분야 추가 시 기본 키와 대소문자를 구분하지 않는 고유 인덱스로 ID와 이름 중복을 방지한다.
 
-문제와 객관식 선택지 이미지는 파일마다 최대 4MB와 2천만 픽셀로 제한한다. Pillow가 실제 내용을 기준으로 PNG, JPEG, WebP인지 확인한 후 방향을 보정하고 메타데이터가 제거된 새 파일로 재인코딩한다. 이미지 바이트와 MIME 타입, SHA-256 해시는 PostgreSQL에 함께 저장하며 일반 문제 목록 조회에서는 큰 바이너리 컬럼을 지연 로딩한다. 이미지 응답은 해시 기반 ETag와 캐시 버전 값을 사용한다. 문제 이미지 한 개와 선택지 이미지 네 개를 함께 등록할 수 있도록 요청 전체 크기는 21MB로 제한한다.
+문제 본문에는 최대 5개, 객관식 선택지에는 각각 한 개의 이미지를 사용할 수 있다. 파일마다 최대 4MB와 2천만 픽셀로 제한한다. Pillow가 확장자가 아닌 실제 내용을 기준으로 PNG, JPEG, WebP인지 확인한 후 방향을 보정하고 메타데이터가 제거된 새 파일로 재인코딩한다. 파일은 `image_uploads` 영속 볼륨에 고유한 이름으로 저장하고 PostgreSQL에는 볼륨 기준 상대 경로, MIME 타입과 SHA-256 해시만 저장한다. 파일 경로는 저장소 경계 안인지 확인한 후 제공하며 이미지 응답은 해시 기반 ETag와 캐시 버전 값을 사용한다. 본문 이미지 다섯 개와 선택지 이미지 네 개를 함께 등록할 수 있도록 요청 전체 크기는 37MB로 제한한다.
 
-문제, 선택지와 해설의 LaTeX는 기본 구분자인 `\(...\)` 또는 `\[...\]`로 저장한다. 관리자 입력 화면은 인라인, 별도 줄, 분수, 제곱, 루트와 합 버튼을 제공하며 선택 영역을 해당 수식 템플릿으로 감쌀 수 있다. 입력 후 250ms 동안 추가 입력이 없으면 MathJax 4의 `typesetPromise()`로 실시간 미리보기를 갱신한다. 미리보기 원문은 `textContent`로 삽입하고 공개 화면은 Jinja 자동 이스케이프를 유지한다.
+문제 본문은 Quill 2 Delta JSON으로 저장한다. 굵게, 기울임, 밑줄, 제목, 목록, 정렬, 줄바꿈과 이미지 슬롯만 서버에서 허용하고 나머지 작업과 속성은 거부한다. 관리자가 이미지 파일을 고르면 현재 커서 또는 선택 영역이 끝나는 위치의 다음 줄에 배치하며, 저장 전 선택 취소·삭제와 정렬을 할 수 있다. 기존 문제의 평문과 단일 이미지는 편집기를 열 때 Delta 문서와 첫 이미지 슬롯으로 자동 표시한다.
+
+문제 추가·수정 화면의 저장 버튼 왼쪽에는 미리보기 버튼이 있다. 미리보기 모달은 저장 전 현재 Quill 본문, 문제 이미지 위치, 문제 유형, 선택지와 선택지 이미지, 복수정답 안내, 주관식 입력란과 해설을 공개 문제 화면과 같은 카드 형태로 구성한다. 사용자 입력은 `textContent` 또는 Quill이 생성한 DOM 복제로 반영하고, 모달을 열 때 MathJax 수식을 다시 렌더링한다.
+
+문제, 선택지와 해설의 LaTeX는 기본 구분자인 `\(...\)` 또는 `\[...\]`로 저장한다. 관리자 입력 화면은 인라인, 분수, 제곱, 루트와 합 버튼을 제공하며 MathJax 4의 `typesetPromise()`로 실시간 미리보기를 갱신한다. 미리보기 원문은 `textContent`로 삽입하고 공개 화면은 Jinja 자동 이스케이프를 유지한다.
 
 ## 5. 주요 요청 흐름
 
@@ -137,7 +146,7 @@ sequenceDiagram
 
 문제 관리 목록은 URL의 `category`, `page` 쿼리로 분야 필터와 페이지 상태를 유지한다. 한 페이지에는 최대 10개 문제를 표시하며, 잘못된 분야는 전체 분야로, 범위를 벗어난 페이지는 가장 가까운 유효 페이지로 보정한다.
 
-문제 변경은 `QuestionRepository`의 트랜잭션을 통해 PostgreSQL에 반영된다. 배포 시 `migrate` 서비스가 Alembic을 먼저 적용한 후 데이터베이스가 비어 있을 때만 `migration/`, 기존 `question_data` 볼륨, 이미지 기본 데이터 순서로 완전한 JSON 쌍을 찾아 가져온다. 기존 JSON 볼륨은 자동 삭제하지 않으므로 전환 확인과 복구에 사용할 수 있다.
+문제 변경은 `QuestionRepository`의 트랜잭션을 통해 PostgreSQL에 반영된다. 새 파일 기록에 실패하면 DB 저장을 진행하지 않고, DB 저장 실패 시 새 파일을 정리한다. 수정과 삭제가 커밋되면 더 이상 참조하지 않는 파일도 제거한다. 배포 시 `migrate` 서비스가 Alembic을 적용하고 기존 DB 이미지 바이트를 `image_uploads` 볼륨으로 이전한 뒤 데이터베이스가 비어 있을 때만 `migration/`, 기존 `question_data` 볼륨, 이미지 기본 데이터 순서로 완전한 JSON 쌍을 찾아 가져온다. 기존 JSON 볼륨은 자동 삭제하지 않으므로 전환 확인과 복구에 사용할 수 있다.
 
 ## 6. 배포 구조
 
@@ -151,6 +160,7 @@ Docker 이미지는 `python:3.13-slim`을 기반으로 하며 Gunicorn을 통해
 - 재시작 정책: `unless-stopped`
 - PostgreSQL: `postgres:17-alpine`, 외부 포트 미공개
 - 영속 데이터: `postgres_data` 이름 있는 볼륨
+- 영속 이미지: `image_uploads` 이름 있는 볼륨
 - 이전 원본: `question_data` 이름 있는 볼륨을 마이그레이션 컨테이너에서 읽기 전용 사용
 - 필수 환경변수: `ADMIN_PASSWORD`, `SECRET_KEY`, `POSTGRES_PASSWORD`
 
@@ -162,7 +172,8 @@ Docker 이미지는 `python:3.13-slim`을 기반으로 하며 Gunicorn을 통해
 - 답안과 점수는 요청 처리 중에만 사용하며 서버에 저장하지 않는다.
 - 관리자 인증은 서명된 세션 쿠키를 사용하며 `HttpOnly`, `SameSite=Lax` 속성을 적용한다. 운영 HTTPS 환경에서는 `Secure` 속성도 활성화한다.
 - 모든 관리자 변경 요청은 CSRF 토큰을 검증한다.
-- 이미지 업로드 요청 전체는 21MB, 개별 이미지는 4MB로 제한하고 SVG 등 실행 가능한 형식을 허용하지 않는다.
+- 이미지 업로드 요청 전체는 37MB, 개별 이미지는 4MB로 제한하고 SVG 등 실행 가능한 형식을 허용하지 않는다.
+- 워드형 편집기의 Delta JSON 등 파일이 아닌 멀티파트 필드는 최대 512KB로 제한한다.
 - 비밀번호는 일정 시간 비교 방식으로 확인하며 반복 로그인 실패를 제한한다.
 - 비밀키와 관리자 비밀번호는 환경변수로만 주입하고 코드와 이미지에 포함하지 않는다.
 - 운영 컨테이너는 비루트 사용자로 실행한다.

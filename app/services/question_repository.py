@@ -26,6 +26,13 @@ class Question:
     explanation: str
     image_digest: str | None = None
     choice_image_digests: tuple[str | None, ...] = ()
+    prompt_document: str | None = None
+    additional_image_digests: tuple[str | None, ...] = ()
+
+    @property
+    def content_image_digests(self) -> tuple[str | None, ...]:
+        """본문 이미지 슬롯별 해시를 반환한다."""
+        return (self.image_digest, *self.additional_image_digests)
 
     @property
     def is_short_answer(self) -> bool:
@@ -149,6 +156,8 @@ class JsonQuestionRepository:
             explanation=raw_question["explanation"],
             image_digest=None,
             choice_image_digests=tuple(None for _ in choices),
+            prompt_document=None,
+            additional_image_digests=(),
         )
 
     def category_counts(self) -> Counter[str]:

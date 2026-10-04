@@ -32,14 +32,16 @@ services:
     restart: "no"
     environment:
       DATABASE_URL: postgresql+psycopg://ml_exam_app:${POSTGRES_PASSWORD}@db:5432/ml_exam
+      IMAGE_STORAGE_PATH: /app/uploads
     command: >-
-      sh -c "alembic upgrade head && python -m app.json_importer"
+      sh -c "alembic upgrade head && python -m app.image_migrator && python -m app.json_importer"
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - ./migration:/app/import-data:ro
       - question_data:/app/legacy-data:ro
+      - image_uploads:/app/uploads
 
   web:
     build: .
@@ -49,12 +51,16 @@ services:
       DATABASE_URL: postgresql+psycopg://ml_exam_app:${POSTGRES_PASSWORD}@db:5432/ml_exam
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 환경변수를 설정해야 합니다}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
+      IMAGE_STORAGE_PATH: /app/uploads
     depends_on:
       migrate:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - image_uploads:/app/uploads
 
 volumes:
   postgres_data:
   question_data:
+  image_uploads:

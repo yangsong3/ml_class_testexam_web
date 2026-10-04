@@ -9,6 +9,7 @@ from app.admin_routes import admin
 from app.database import Database
 from app.routes import quiz
 from app.services.database_repositories import CategoryRepository, QuestionRepository
+from app.services.image_storage import ImageStorage
 from app.services.login_attempt_tracker import LoginAttemptTracker
 
 
@@ -28,8 +29,11 @@ def create_app(test_config: Mapping[str, object] | None = None) -> Flask:
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
         PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),
-        MAX_CONTENT_LENGTH=21 * 1024 * 1024,
-        MAX_FORM_MEMORY_SIZE=64 * 1024,
+        MAX_CONTENT_LENGTH=37 * 1024 * 1024,
+        MAX_FORM_MEMORY_SIZE=512 * 1024,
+        IMAGE_STORAGE_PATH=os.environ.get(
+            "IMAGE_STORAGE_PATH", str(project_root / "uploads")
+        ),
     )
     if test_config is not None:
         app.config.update(test_config)
@@ -38,8 +42,15 @@ def create_app(test_config: Mapping[str, object] | None = None) -> Flask:
     if not isinstance(database_url, str) or not database_url:
         raise RuntimeError("DATABASE_URL 환경변수가 필요합니다.")
     database = Database(database_url)
+    image_storage_path = app.config.get("IMAGE_STORAGE_PATH")
+    if not isinstance(image_storage_path, (str, Path)):
+        raise RuntimeError("IMAGE_STORAGE_PATH 설정이 올바르지 않습니다.")
+    image_storage = ImageStorage(Path(image_storage_path))
     app.extensions["database"] = database
-    app.config["QUESTION_REPOSITORY"] = QuestionRepository(database.session_factory)
+    app.extensions["image_storage"] = image_storage
+    app.config["QUESTION_REPOSITORY"] = QuestionRepository(
+        database.session_factory, image_storage
+    )
     app.config["CATEGORY_REPOSITORY"] = CategoryRepository(database.session_factory)
     app.config["LOGIN_ATTEMPT_TRACKER"] = LoginAttemptTracker()
     app.register_blueprint(quiz)

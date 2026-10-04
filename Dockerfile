@@ -15,7 +15,7 @@ COPY static ./static
 COPY templates ./templates
 COPY wsgi.py ./
 
-RUN useradd --create-home appuser && chown -R appuser:appuser /app
+RUN mkdir -p /app/uploads && useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
 EXPOSE 8000
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--timeout", "30", "wsgi:app"]

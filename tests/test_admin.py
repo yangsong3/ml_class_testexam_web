@@ -1,15 +1,17 @@
 from pathlib import Path
 from io import BytesIO
+import json
 
 from flask import Flask
 from flask.testing import FlaskClient
 from PIL import Image
+from sqlalchemy import select
 from werkzeug.datastructures import MultiDict
 
 from app import create_app
 from app.database import Database
 from app.json_importer import import_json_if_empty
-from app.models import Base
+from app.models import Base, ChoiceModel, QuestionContentImageModel, QuestionModel
 
 
 def copy_test_data(tmp_path: Path) -> tuple[Path, Path]:
@@ -41,6 +43,7 @@ def create_test_app(tmp_path: Path) -> Flask:
             "SECRET_KEY": "테스트에서만-사용하는-세션-서명키",
             "SESSION_COOKIE_SECURE": False,
             "DATABASE_URL": database_url,
+            "IMAGE_STORAGE_PATH": tmp_path / "uploads",
         }
     )
 
@@ -90,6 +93,15 @@ def png_upload() -> tuple[BytesIO, str]:
     Image.new("RGB", (16, 12), "white").save(image_data, format="PNG")
     image_data.seek(0)
     return image_data, "formula.png"
+
+
+def rich_question_document(text: str, image_slots: tuple[int, ...] = ()) -> str:
+    """테스트용 서식 문제 문서를 생성한다."""
+    operations: list[dict[str, object]] = [{"insert": f"{text}\n"}]
+    for slot in image_slots:
+        operations.append({"insert": {"questionImage": slot}})
+        operations.append({"insert": "\n"})
+    return json.dumps({"ops": operations}, ensure_ascii=False)
 
 
 def test_admin_requires_login_and_csrf(tmp_path: Path) -> None:
@@ -246,8 +258,14 @@ def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:
     assert "문제 추가" in form_content
     assert 'value="basics-004"' in form_content
     assert 'data-recommended-id="numpy-004"' in form_content
-    assert form_content.count("data-math-editor") == 6
-    assert form_content.count('data-math-action="fraction"') == 6
+    assert form_content.count("data-math-editor") == 5
+    assert form_content.count('data-math-action="fraction"') == 5
+    assert "data-rich-question-editor" in form_content
+    assert "이미지 추가" in form_content
+    assert form_content.count("data-clear-choice-image") == 4
+    assert form_content.count(">선택 취소</button>") == 4
+    assert "data-open-question-preview" in form_content
+    assert "저장 화면 미리보기" in form_content
     assert "실시간 미리보기" in form_content
 
     create_response = client.post(
@@ -383,6 +401,10 @@ def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> Non
     form_data["identifier"] = "basics-999"
     form_data["category"] = "basics"
     form_data["image"] = png_upload()
+    form_data["content_image_1"] = png_upload()
+    form_data["prompt_document"] = rich_question_document(
+        r"다음 식 \(x^2 + 1\)을 확인하세요.", (0, 1)
+    )
 
     create_response = client.post("/admin/questions/new", data=form_data)
 
@@ -390,6 +412,22 @@ def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> Non
     stored_question = app.config["QUESTION_REPOSITORY"].find("basics-999")
     assert stored_question is not None
     assert stored_question.image_digest is not None
+    assert stored_question.additional_image_digests[0] is not None
+    database = app.extensions["database"]
+    with database.session_factory() as session:
+        stored_model = session.get(QuestionModel, "basics-999")
+        assert stored_model is not None
+        assert stored_model.image_path is not None
+        assert stored_model.image_data is None
+        content_model = session.scalar(
+            select(QuestionContentImageModel).where(
+                QuestionContentImageModel.question_id == "basics-999",
+                QuestionContentImageModel.slot == 1,
+            )
+        )
+        assert content_model is not None
+        assert content_model.image_path is not None
+        assert content_model.image_data is None
 
     image_response = client.get("/questions/basics-999/image")
     assert image_response.status_code == 200
@@ -401,11 +439,16 @@ def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> Non
         headers={"If-None-Match": image_response.headers["ETag"]},
     )
     assert cached_response.status_code == 304
+    second_image_response = client.get(
+        "/questions/basics-999/content-images/1"
+    )
+    assert second_image_response.status_code == 200
 
     quiz_content = client.get("/quiz?category=basics").get_data(as_text=True)
     assert r"\(x^2 + 1\)" in quiz_content
     assert "mathjax@4.0.0/tex-chtml.js" in quiz_content
-    assert "/questions/basics-999/image" in quiz_content
+    assert "/questions/basics-999/content-images/0" in quiz_content
+    assert "/questions/basics-999/content-images/1" in quiz_content
 
     retained_digest = stored_question.image_digest
     edit_data: dict[str, object] = question_form_data(
@@ -416,6 +459,9 @@ def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> Non
             "identifier": "basics-999",
             "category": "basics",
         }
+    )
+    edit_data["prompt_document"] = rich_question_document(
+        r"수정된 식 \(x^2 + 1\)", (0, 1)
     )
     edit_response = client.post(
         "/admin/questions/basics-999/edit", data=edit_data
@@ -429,6 +475,9 @@ def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> Non
 
     edit_data["csrf_token"] = get_csrf_token(client)
     edit_data["remove_image"] = "1"
+    edit_data["prompt_document"] = rich_question_document(
+        r"수정된 식 \(x^2 + 1\)", (1,)
+    )
     remove_response = client.post(
         "/admin/questions/basics-999/edit", data=edit_data
     )
@@ -457,6 +506,17 @@ def test_admin_can_store_render_and_remove_choice_images(tmp_path: Path) -> None
     assert stored_question.choice_image_digests[0] is not None
     assert stored_question.choice_image_digests[1] is None
     assert stored_question.choice_image_digests[2] is not None
+    database = app.extensions["database"]
+    with database.session_factory() as session:
+        stored_choice = session.scalar(
+            select(ChoiceModel).where(
+                ChoiceModel.question_id == "numpy-995",
+                ChoiceModel.position == 0,
+            )
+        )
+        assert stored_choice is not None
+        assert stored_choice.image_path is not None
+        assert stored_choice.image_data is None
 
     image_response = client.get("/questions/numpy-995/choices/0/image")
     assert image_response.status_code == 200
@@ -514,3 +574,68 @@ def test_admin_rejects_non_image_upload(tmp_path: Path) -> None:
         as_text=True
     )
     assert app.config["QUESTION_REPOSITORY"].find("numpy-995") is None
+
+    unsafe_document_data: dict[str, object] = question_form_data(
+        get_csrf_token(client)
+    )
+    unsafe_document_data["identifier"] = "numpy-994"
+    unsafe_document_data["prompt_document"] = json.dumps(
+        {"ops": [{"insert": {"video": "https://example.com/video"}}]}
+    )
+
+    document_response = client.post(
+        "/admin/questions/new", data=unsafe_document_data
+    )
+
+    assert document_response.status_code == 200
+    assert "허용되지 않은 콘텐츠" in document_response.get_data(as_text=True)
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-994") is None
+
+    missing_image_data: dict[str, object] = question_form_data(
+        get_csrf_token(client)
+    )
+    missing_image_data["identifier"] = "numpy-993"
+    missing_image_data["prompt_document"] = rich_question_document(
+        "파일을 다시 선택해야 하는 문제", (0,)
+    )
+
+    missing_image_response = client.post(
+        "/admin/questions/new", data=missing_image_data
+    )
+
+    assert missing_image_response.status_code == 200
+    assert "오류 후 다시 표시된 화면에서는 이미지를 다시 선택" in (
+        missing_image_response.get_data(as_text=True)
+    )
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-993") is None
+
+
+def test_rich_form_accepts_multiple_images_and_large_metadata(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    problem_image = png_upload()
+    problem_image[0].seek(0, 2)
+    problem_image[0].write(b"0" * (1_782_579 - problem_image[0].tell()))
+    problem_image[0].seek(0)
+    choice_image = png_upload()
+    choice_image[0].seek(0, 2)
+    choice_image[0].write(b"0" * (838_861 - choice_image[0].tell()))
+    choice_image[0].seek(0)
+    form_data: dict[str, object] = question_form_data(get_csrf_token(client))
+    form_data.update(
+        {
+            "identifier": "numpy-size-test",
+            "prompt_document": rich_question_document("용량 검사", (0,)),
+            "content_image_0": problem_image,
+            "choice_image_0": choice_image,
+            "editor_metadata": "x" * 70_000,
+        }
+    )
+
+    response = client.post("/admin/questions/new", data=form_data)
+
+    assert response.status_code == 302
+    assert response.request.content_length is not None
+    assert response.request.content_length > 2_500_000
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-size-test") is not None

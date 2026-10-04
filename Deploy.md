@@ -23,6 +23,7 @@ flowchart LR
     G --> F[Flask 애플리케이션]
     F --> P[(PostgreSQL 컨테이너)]
     P --> V[(postgres_data 볼륨)]
+    F --> I[(image_uploads 볼륨)]
 ```
 
 Nginx만 인터넷에 공개하고 Gunicorn의 8000번 포트는 서버 내부에서만 접근하게 한다. `docker-compose.yml`은 `127.0.0.1:8000:8000`으로 설정되어 있으므로 외부에서 Gunicorn 포트에 직접 접속할 수 없다.
@@ -182,7 +183,7 @@ SESSION_COOKIE_SECURE=1
 
 ### PostgreSQL과 운영 포트 제한
 
-`docker-compose.yml`은 PostgreSQL 포트를 호스트에 공개하지 않고 웹 포트만 루프백에 연결한다. `postgres_data`는 운영 데이터, 기존 `question_data`는 최초 JSON 이전 원본으로 사용한다. `migrate` 서비스가 성공해야 웹 서비스가 시작된다.
+`docker-compose.yml`은 PostgreSQL 포트를 호스트에 공개하지 않고 웹 포트만 루프백에 연결한다. `postgres_data`는 문제 메타데이터, `image_uploads`는 업로드 이미지 파일, 기존 `question_data`는 최초 JSON 이전 원본으로 사용한다. `migrate` 서비스가 성공해야 웹 서비스가 시작된다.
 
 ```yaml
 services:
@@ -197,6 +198,7 @@ services:
     volumes:
       - ./migration:/app/import-data:ro
       - question_data:/app/legacy-data:ro
+      - image_uploads:/app/uploads
   web:
     build: .
     restart: unless-stopped
@@ -205,12 +207,16 @@ services:
       DATABASE_URL: postgresql+psycopg://ml_exam_app:${POSTGRES_PASSWORD}@db:5432/ml_exam
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 환경변수를 설정해야 합니다}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-0}
+      IMAGE_STORAGE_PATH: /app/uploads
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - image_uploads:/app/uploads
 
 volumes:
   postgres_data:
   question_data:
+  image_uploads:
 ```
 
 구성 파일이 유효한지 확인한다.
@@ -248,7 +254,7 @@ server {
     listen [::]:80;
     server_name yangsong.cloud;
 
-    client_max_body_size 21m;
+    client_max_body_size 37m;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -263,7 +269,9 @@ server {
 }
 ```
 
-문제 이미지 한 개와 선택지 이미지 네 개를 한 요청에서 등록할 수 있도록 Nginx와 애플리케이션의 요청 크기 제한을 모두 21MB로 맞춘다. 각 이미지 파일 자체는 애플리케이션에서 4MB 이하로 별도 검증한다.
+문제 본문 이미지 다섯 개와 선택지 이미지 네 개를 한 요청에서 등록할 수 있도록 Nginx와 애플리케이션의 요청 크기 제한을 모두 37MB로 맞춘다. 각 이미지 파일 자체는 애플리케이션에서 4MB 이하로 별도 검증한다.
+
+Flask의 파일이 아닌 멀티파트 필드 제한은 512KB다. 이 값은 이미지 파일 크기 제한과 별개이며 워드형 편집기의 Delta JSON을 수용하도록 설정한다.
 
 `www.yangsong.cloud`도 사용할 경우 `server_name`을 다음과 같이 작성하고 인증서 발급 명령에도 도메인을 추가한다.
 
@@ -317,8 +325,8 @@ curl --fail --show-error https://yangsong.cloud/
 4. 문제 작성 양식에서 JSON 파일을 내려받을 수 있다.
 5. `/admin`은 로그인하지 않은 사용자를 로그인 화면으로 이동시킨다.
 6. 관리자 로그인 후 분야 추가와 문제 추가·수정·삭제가 정상 동작한다.
-7. PNG, JPEG 또는 WebP 문제·선택지 이미지의 등록·교체·삭제와 표시가 정상 동작한다.
-8. 문제·선택지·해설의 수식 버튼과 실시간 미리보기가 동작하고 저장한 LaTeX가 MathJax로 표시된다.
+7. 워드형 문제 편집기에서 줄바꿈, 기본 서식, 이미지 최대 5개의 커서 위치 삽입·정렬·선택 취소·삭제와 저장 전 팝업 미리보기가 정상 동작한다.
+8. PNG, JPEG 또는 WebP 문제·선택지 이미지와 수식 버튼·실시간 미리보기가 정상 동작한다.
 9. 존재하지 않는 분야는 `404`를 반환한다.
 
 ```bash
@@ -370,7 +378,7 @@ sudo docker image prune
 
 ## 10. 데이터 이전과 백업
 
-최초 기동 시 Alembic이 스키마를 생성하고 `app.json_importer`가 빈 데이터베이스에 기존 JSON을 한 번만 가져온다. 원본 우선순위는 프로젝트의 `migration/`, 기존 `question_data` 볼륨, Docker 이미지에 포함된 기본 JSON 순서다. 각 위치에 `categories.json`과 `questions.json`이 모두 있어야 사용한다. 데이터베이스에 분야나 문제가 하나라도 있으면 가져오기를 건너뛰므로 재배포가 운영 데이터를 덮어쓰지 않는다.
+최초 기동 시 Alembic이 스키마를 생성하고 `app.image_migrator`가 기존 DB 이미지 바이트를 `image_uploads` 볼륨으로 옮긴 다음, `app.json_importer`가 빈 데이터베이스에 기존 JSON을 한 번만 가져온다. 이미지 이전이 완료되면 DB의 바이너리 값은 비우고 상대 경로, MIME 타입과 해시만 유지한다. JSON 원본 우선순위는 프로젝트의 `migration/`, 기존 `question_data` 볼륨, Docker 이미지에 포함된 기본 JSON 순서다. 각 위치에 `categories.json`과 `questions.json`이 모두 있어야 사용한다. 데이터베이스에 분야나 문제가 하나라도 있으면 가져오기를 건너뛰므로 재배포가 운영 데이터를 덮어쓰지 않는다.
 
 로컬에서 추출한 최신 데이터를 새 서버로 옮길 때는 최초 `docker compose up` 전에 두 파일을 서버 프로젝트의 `migration/`에 전송한다.
 
@@ -378,7 +386,7 @@ sudo docker image prune
 scp migration/categories.json migration/questions.json <서버_사용자>@<서버_공인_IP>:/srv/ml_class_mid_exam/migration/
 ```
 
-문제, 분야와 문제·선택지 이미지 바이트는 모두 `postgres_data` 볼륨에 저장한다. 따라서 다음 PostgreSQL 백업에 이미지도 함께 포함된다.
+분야, 문제와 이미지 메타데이터는 `postgres_data`에 저장하고 실제 이미지 파일은 `image_uploads`에 저장한다. 일관된 복구를 위해 PostgreSQL 덤프와 이미지 디렉터리를 같은 점검 시간에 함께 백업한다.
 
 ```bash
 cd /srv/ml_class_mid_exam
@@ -386,6 +394,7 @@ mkdir -p backups
 chmod 700 backups
 sudo docker compose exec -T db pg_dump -U ml_exam_app -d ml_exam -Fc > backups/ml-exam-YYYYMMDD-HHMMSS.dump
 test -s backups/ml-exam-YYYYMMDD-HHMMSS.dump
+sudo docker compose cp web:/app/uploads backups/image_uploads-YYYYMMDD-HHMMSS
 ```
 
 복원은 기존 데이터를 교체하므로 점검 시간을 확보하고 백업 파일을 확인한 뒤 실행한다.
@@ -395,11 +404,12 @@ sudo docker compose stop web
 sudo docker compose exec -T db dropdb -U ml_exam_app --if-exists ml_exam
 sudo docker compose exec -T db createdb -U ml_exam_app ml_exam
 sudo docker compose exec -T db pg_restore -U ml_exam_app -d ml_exam --clean --if-exists < backups/ml-exam-YYYYMMDD-HHMMSS.dump
+sudo docker compose cp backups/image_uploads-YYYYMMDD-HHMMSS/. web:/app/uploads/
 sudo docker compose up -d
 curl --fail --show-error http://127.0.0.1:8000/
 ```
 
-`docker compose down -v`는 PostgreSQL 운영 볼륨까지 삭제하므로 실행하지 않는다. 기존 `question_data` 볼륨은 PostgreSQL 이전과 백업을 확인할 때까지 보존한다. 사용자 답안과 점수는 저장하지 않는다.
+`docker compose down -v`는 PostgreSQL과 이미지 운영 볼륨까지 삭제하므로 실행하지 않는다. 기존 `question_data` 볼륨은 PostgreSQL 이전과 백업을 확인할 때까지 보존한다. 사용자 답안과 점수는 저장하지 않는다.
 
 ## 11. 장애 대응과 복구
 
@@ -454,9 +464,9 @@ curl --fail --show-error http://127.0.0.1:8000/
 - [ ] Compose 포트가 `127.0.0.1:8000:8000`으로 제한되어 있다.
 - [ ] 컨테이너가 `appuser`로 실행된다.
 - [ ] 관리자 로그인과 분야 추가 및 문제 추가·수정·삭제가 정상 동작한다.
-- [ ] 문제·선택지 이미지 업로드와 수식 버튼·실시간 미리보기·LaTeX 표시가 정상 동작한다.
+- [ ] 문제·선택지 이미지 업로드, 수식 버튼·실시간 미리보기와 저장 전 팝업 미리보기가 정상 동작한다.
 - [ ] `db` 상태가 healthy이고 `migrate` 서비스가 종료 코드 0이다.
-- [ ] PostgreSQL 백업 및 복원 절차를 확인했다.
+- [ ] PostgreSQL과 `image_uploads`의 백업 및 복원 절차를 함께 확인했다.
 - [ ] Nginx 설정 문법 검사를 통과한다.
 - [ ] UFW에서 SSH, HTTP, HTTPS만 허용한다.
 - [ ] HTTPS 접속과 인증서 자동 갱신 테스트가 성공한다.
@@ -473,3 +483,5 @@ curl --fail --show-error http://127.0.0.1:8000/
 - [Certbot 공식 문서](https://eff-certbot.readthedocs.io/en/stable/)
 - [Ubuntu 방화벽 안내](https://ubuntu.com/server/docs/how-to/security/firewalls/)
 - [Flask 보안 고려사항](https://flask.palletsprojects.com/en/stable/web-security/)
+- [Quill 설치와 CDN 사용](https://quilljs.com/docs/installation)
+- [Quill Delta 문서 형식](https://quilljs.com/docs/delta)
