@@ -63,3 +63,28 @@ if (questionDocuments.length && window.Quill) {
     window.MathJax.typesetPromise(Array.from(questionDocuments));
   }
 }
+
+const choiceDocuments = document.querySelectorAll("[data-choice-document]");
+
+if (choiceDocuments.length && window.Quill) {
+  choiceDocuments.forEach((container) => {
+    const fallback = container.querySelector(".choice-document-fallback");
+    const editor = document.createElement("div");
+    container.append(editor);
+    try {
+      const quill = new window.Quill(editor, {
+        readOnly: true,
+        modules: { toolbar: null },
+        formats: ["bold", "italic", "underline"],
+      });
+      quill.setContents(JSON.parse(container.dataset.document));
+      fallback.hidden = true;
+    } catch (error) {
+      editor.remove();
+    }
+  });
+
+  if (window.MathJax?.typesetPromise) {
+    window.MathJax.typesetPromise(Array.from(choiceDocuments));
+  }
+}

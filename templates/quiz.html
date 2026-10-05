@@ -35,7 +35,13 @@
         {% for choice in question.choices %}
         {% set choice_index = loop.index0 %}
         <label class="choice-option">
-          <span><input type="{{ 'checkbox' if question.correct_choice_indices|length > 1 else 'radio' }}" name="answer_{{ question.identifier }}" value="{{ choice_index }}"> <b>{{ '①②③④⑤'[choice_index] }}</b> {{ choice }}</span>
+          <div class="choice-line"><input type="{{ 'checkbox' if question.correct_choice_indices|length > 1 else 'radio' }}" name="answer_{{ question.identifier }}" value="{{ choice_index }}"> <b>{{ '①②③④⑤'[choice_index] }}</b>
+            {% if choice_index < question.choice_documents|length and question.choice_documents[choice_index] %}
+              <div class="choice-document" data-choice-document data-document="{{ question.choice_documents[choice_index] }}"><div class="choice-document-fallback">{{ choice }}</div></div>
+            {% else %}
+              <span>{{ choice }}</span>
+            {% endif %}
+          </div>
           {% if choice_index < question.choice_image_digests|length and question.choice_image_digests[choice_index] %}
             <img class="choice-image" src="{{ url_for('quiz.choice_image', identifier=question.identifier, position=choice_index, v=question.choice_image_digests[choice_index]) }}" alt="{{ loop.index }}번 선택지 참고 이미지" loading="lazy">
           {% endif %}

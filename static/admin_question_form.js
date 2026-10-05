@@ -1,5 +1,6 @@
 const questionForm = document.querySelector(".admin-question-form");
 const selectedUploadFiles = new Map();
+const choiceRichEditors = new Map();
 
 if (questionForm) {
   questionForm.querySelectorAll("input[type='file']").forEach((input) => {
@@ -438,6 +439,42 @@ if (questionForm) {
   });
 }
 
+if (questionForm && window.Quill) {
+  questionForm.querySelectorAll("[data-choice-rich-editor]").forEach(
+    (container) => {
+      const editorElement = container.querySelector("[data-choice-editor]");
+      const textInput = container.querySelector("[data-choice-text]");
+      const documentInput = container.querySelector("[data-choice-document]");
+      const quill = new window.Quill(editorElement, {
+        theme: "snow",
+        placeholder: "선택지 내용을 입력하세요.",
+        formats: ["bold", "italic", "underline"],
+        modules: { toolbar: false },
+      });
+
+      try {
+        const storedDocument = container.dataset.document;
+        if (storedDocument) {
+          quill.setContents(JSON.parse(storedDocument));
+        } else {
+          quill.setText(textInput.value);
+        }
+      } catch (error) {
+        quill.setText(textInput.value);
+      }
+
+      const syncChoiceEditor = () => {
+        textInput.value = quill.getText().trim();
+        documentInput.value = JSON.stringify(quill.getContents());
+      };
+      quill.on("text-change", syncChoiceEditor);
+      choiceRichEditors.set(Number(container.dataset.choiceIndex), quill);
+      questionForm.addEventListener("submit", syncChoiceEditor);
+      syncChoiceEditor();
+    }
+  );
+}
+
 const questionPreview = document.querySelector("[data-question-preview]");
 
 if (questionForm && questionPreview) {
@@ -519,16 +556,23 @@ if (questionForm && questionPreview) {
       for (let index = 0; index < 4; index += 1) {
         const label = document.createElement("label");
         label.className = "choice-option";
-        const line = document.createElement("span");
+        const line = document.createElement("div");
+        line.className = "choice-line";
         const answerInput = document.createElement("input");
         answerInput.type = answerType;
         answerInput.disabled = true;
         const number = document.createElement("b");
         number.textContent = "①②③④"[index];
-        const text = document.createTextNode(
-          ` ${questionForm.elements[`choice_${index}`].value || "선택지 내용"}`
-        );
-        line.append(answerInput, " ", number, text);
+        const choiceContent = document.createElement("div");
+        choiceContent.className = "choice-document";
+        const choiceEditor = choiceRichEditors.get(index);
+        const richChoiceContent = choiceEditor?.root.cloneNode(true);
+        if (richChoiceContent && choiceEditor.getText().trim()) {
+          choiceContent.append(richChoiceContent);
+        } else {
+          choiceContent.textContent = "선택지 내용";
+        }
+        line.append(answerInput, number, choiceContent);
         label.append(line);
         const imageUrl = choiceImageUrl(index);
         if (imageUrl) {

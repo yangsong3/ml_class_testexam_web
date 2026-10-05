@@ -28,6 +28,7 @@ class Question:
     choice_image_digests: tuple[str | None, ...] = ()
     prompt_document: str | None = None
     additional_image_digests: tuple[str | None, ...] = ()
+    choice_documents: tuple[str | None, ...] = ()
 
     @property
     def content_image_digests(self) -> tuple[str | None, ...]:
@@ -158,6 +159,7 @@ class JsonQuestionRepository:
             choice_image_digests=tuple(None for _ in choices),
             prompt_document=None,
             additional_image_digests=(),
+            choice_documents=tuple(None for _ in choices),
         )
 
     def category_counts(self) -> Counter[str]:

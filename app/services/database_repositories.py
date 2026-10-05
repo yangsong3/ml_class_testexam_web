@@ -124,6 +124,7 @@ class QuestionRepository:
                 )
                 for slot in range(1, 5)
             ),
+            choice_documents=tuple(choice.text_document for choice in model.choices),
         )
 
     def category_counts(self) -> Counter[str]:
@@ -406,6 +407,11 @@ class QuestionRepository:
                 ChoiceModel(
                     position=index,
                     text=choice,
+                    text_document=(
+                        question.choice_documents[index]
+                        if index < len(question.choice_documents)
+                        else None
+                    ),
                     is_correct=index in question.correct_choice_indices,
                     image_path=choice_image.relative_path if choice_image else None,
                     image_mime_type=choice_image.mime_type if choice_image else None,

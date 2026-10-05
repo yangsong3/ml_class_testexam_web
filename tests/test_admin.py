@@ -104,6 +104,19 @@ def rich_question_document(text: str, image_slots: tuple[int, ...] = ()) -> str:
     return json.dumps({"ops": operations}, ensure_ascii=False)
 
 
+def rich_choice_document(text: str) -> str:
+    """테스트용 서식 선택지 문서를 생성한다."""
+    return json.dumps(
+        {
+            "ops": [
+                {"insert": text, "attributes": {"bold": True}},
+                {"insert": "\n둘째 줄\n"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
 def test_admin_requires_login_and_csrf(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = app.test_client()
@@ -258,8 +271,10 @@ def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:
     assert "문제 추가" in form_content
     assert 'value="basics-004"' in form_content
     assert 'data-recommended-id="numpy-004"' in form_content
-    assert form_content.count("data-math-editor") == 5
-    assert form_content.count('data-math-action="fraction"') == 5
+    assert form_content.count("data-math-editor") == 1
+    assert form_content.count('data-math-action="fraction"') == 1
+    assert form_content.count("data-choice-rich-editor") == 4
+    assert form_content.count("data-choice-document") == 4
     assert "data-rich-question-editor" in form_content
     assert "이미지 추가" in form_content
     assert form_content.count("data-clear-choice-image") == 4
@@ -270,11 +285,22 @@ def test_admin_can_create_edit_and_delete_question(tmp_path: Path) -> None:
 
     create_response = client.post(
         "/admin/questions/new",
-        data=question_form_data(get_csrf_token(client)),
+        data={
+            **question_form_data(get_csrf_token(client)),
+            "choice_document_0": rich_choice_document("서식 선택지"),
+        },
         follow_redirects=True,
     )
     assert create_response.status_code == 200
     assert "문제를 추가했습니다." in create_response.get_data(as_text=True)
+    stored_question = app.config["QUESTION_REPOSITORY"].find("numpy-999")
+    assert stored_question is not None
+    assert stored_question.choices[0] == "서식 선택지\n둘째 줄"
+    assert stored_question.choice_documents[0] is not None
+
+    quiz_content = client.get("/quiz?category=numpy").get_data(as_text=True)
+    assert "data-choice-document" in quiz_content
+    assert "서식 선택지" in quiz_content
 
     next_form_response = client.get("/admin/questions/new")
     assert 'data-recommended-id="numpy-1000"' in next_form_response.get_data(
@@ -590,6 +616,24 @@ def test_admin_rejects_non_image_upload(tmp_path: Path) -> None:
     assert document_response.status_code == 200
     assert "허용되지 않은 콘텐츠" in document_response.get_data(as_text=True)
     assert app.config["QUESTION_REPOSITORY"].find("numpy-994") is None
+
+    unsafe_choice_data: dict[str, object] = question_form_data(
+        get_csrf_token(client)
+    )
+    unsafe_choice_data["identifier"] = "numpy-992"
+    unsafe_choice_data["choice_document_0"] = json.dumps(
+        {"ops": [{"insert": {"image": "data:image/png;base64,unsafe"}}]}
+    )
+
+    choice_document_response = client.post(
+        "/admin/questions/new", data=unsafe_choice_data
+    )
+
+    assert choice_document_response.status_code == 200
+    assert "선택지에는 텍스트만 입력" in choice_document_response.get_data(
+        as_text=True
+    )
+    assert app.config["QUESTION_REPOSITORY"].find("numpy-992") is None
 
     missing_image_data: dict[str, object] = question_form_data(
         get_csrf_token(client)

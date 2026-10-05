@@ -97,7 +97,7 @@ flowchart LR
 | --- | --- | --- |
 | `categories` | `identifier`, `name`, `sort_order` | 분야와 표시 순서 |
 | `questions` | `identifier`, `category_id`, `question_type`, `prompt`, `prompt_document`, `explanation`, 첫 이미지 상대 경로·MIME·해시, `sort_order` | 문제 공통 정보, Quill Delta 문서와 첫 이미지 참조 |
-| `question_choices` | `question_id`, `position`, `text`, `is_correct`, 이미지 상대 경로·MIME·해시 | 객관식 선택지, 복수 정답 여부와 선택적 이미지 참조 |
+| `question_choices` | `question_id`, `position`, `text`, `text_document`, `is_correct`, 이미지 상대 경로·MIME·해시 | 객관식 선택지 원문, Quill Delta 서식 문서, 복수 정답 여부와 선택적 이미지 참조 |
 | `question_content_images` | `question_id`, `slot`, 이미지 상대 경로·MIME·해시 | 문제 본문의 두 번째부터 다섯 번째 이미지 참조 |
 | `short_answers` | `question_id`, `position`, `text` | 허용할 주관식 정답 표현 |
 

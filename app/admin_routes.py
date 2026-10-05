@@ -23,6 +23,7 @@ from app.services.database_repositories import CategoryRepository, QuestionRepos
 from app.services.image_processor import QuestionImage, process_question_image
 from app.services.question_document import (
     MAX_CONTENT_IMAGES,
+    validate_choice_document,
     validate_question_document,
 )
 from app.services.question_repository import (
@@ -53,6 +54,7 @@ class QuestionFormValues:
     explanation: str
     image_digest: str | None
     choice_image_digests: tuple[str | None, ...]
+    choice_documents: tuple[str | None, ...]
     prompt_document: str | None
     content_image_digests: tuple[str | None, ...]
     document_image_slots: tuple[int, ...]
@@ -541,6 +543,10 @@ def question_from_form(
         request.form.get(f"choice_{index}", "").strip()
         for index in range(CHOICE_COUNT)
     )
+    raw_choice_documents = tuple(
+        request.form.get(f"choice_document_{index}", "")
+        for index in range(CHOICE_COUNT)
+    )
     explanation = request.form.get("explanation", "").strip()
     errors: list[str] = []
 
@@ -562,9 +568,24 @@ def question_from_form(
     correct_choice_indices: tuple[int, ...] = ()
     accepted_text_answers: tuple[str, ...] = ()
     if question_type == MULTIPLE_CHOICE:
-        choices = submitted_choices
-        if any(not choice or len(choice) > 200 for choice in choices):
-            errors.append("객관식 선택지는 각각 1~200자로 입력해 주세요.")
+        validated_choices: list[str] = []
+        choice_documents_list: list[str | None] = []
+        for index, (raw_document, fallback_text) in enumerate(
+            zip(raw_choice_documents, submitted_choices, strict=True)
+        ):
+            try:
+                choice_document = validate_choice_document(
+                    raw_document, fallback_text
+                )
+            except ValueError as error:
+                errors.append(f"선택지 {index + 1}: {error}")
+                validated_choices.append(fallback_text)
+                choice_documents_list.append(raw_document or None)
+            else:
+                validated_choices.append(choice_document.plain_text)
+                choice_documents_list.append(choice_document.json_data)
+        choices = tuple(validated_choices)
+        choice_documents = tuple(choice_documents_list)
         try:
             correct_choice_indices = tuple(
                 sorted({int(value) for value in request.form.getlist("answers")})
@@ -577,6 +598,7 @@ def question_from_form(
             errors.append("객관식 정답을 하나 이상 선택해 주세요.")
     elif question_type == SHORT_ANSWER:
         choices = ()
+        choice_documents = ()
         accepted_text_answers = tuple(
             dict.fromkeys(
                 line.strip()
@@ -590,6 +612,7 @@ def question_from_form(
             errors.append("주관식 정답을 줄마다 1~200자로 하나 이상 입력해 주세요.")
     else:
         choices = submitted_choices
+        choice_documents = tuple(raw_choice_documents)
         errors.append("올바른 문제 유형을 선택해 주세요.")
 
     form_values = QuestionFormValues(
@@ -603,6 +626,7 @@ def question_from_form(
         explanation=explanation,
         image_digest=existing_image_digest,
         choice_image_digests=existing_choice_image_digests,
+        choice_documents=choice_documents,
         prompt_document=prompt_document.json_data or existing_prompt_document,
         content_image_digests=(
             existing_content_image_digests
@@ -626,6 +650,7 @@ def question_from_form(
             explanation=explanation,
             image_digest=existing_image_digest,
             choice_image_digests=existing_choice_image_digests,
+            choice_documents=choice_documents,
             prompt_document=prompt_document.json_data,
             additional_image_digests=tuple(
                 (existing_content_image_digests or (None,) * MAX_CONTENT_IMAGES)[1:]

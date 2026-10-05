@@ -77,6 +77,66 @@ def validate_question_document(raw_document: str, fallback_text: str) -> Questio
     )
 
 
+def validate_choice_document(raw_document: str, fallback_text: str) -> QuestionDocument:
+    """선택지 Delta 문서를 텍스트와 인라인 서식으로 제한한다."""
+    if not raw_document.strip():
+        plain_text = fallback_text.strip()
+        if not plain_text or len(plain_text) > 200:
+            raise ValueError("내용은 1~200자로 입력해 주세요.")
+        document = {"ops": [{"insert": f"{plain_text}\n"}]}
+        return QuestionDocument(
+            json_data=json.dumps(document, ensure_ascii=False, separators=(",", ":")),
+            plain_text=plain_text,
+            image_slots=(),
+        )
+
+    try:
+        document = json.loads(raw_document)
+    except json.JSONDecodeError as error:
+        raise ValueError("선택지 문서 형식이 올바르지 않습니다.") from error
+    if not isinstance(document, dict) or not isinstance(document.get("ops"), list):
+        raise ValueError("선택지 문서 형식이 올바르지 않습니다.")
+
+    normalized_ops: list[dict[str, Any]] = []
+    text_parts: list[str] = []
+    for operation in document["ops"]:
+        if not isinstance(operation, dict) or "insert" not in operation:
+            raise ValueError("선택지에 허용되지 않은 작업이 있습니다.")
+        insert = operation["insert"]
+        if not isinstance(insert, str) or "\x00" in insert:
+            raise ValueError("선택지에는 텍스트만 입력할 수 있습니다.")
+        attributes = _validate_choice_attributes(operation.get("attributes"))
+        normalized: dict[str, Any] = {"insert": insert}
+        if attributes:
+            normalized["attributes"] = attributes
+        normalized_ops.append(normalized)
+        text_parts.append(insert)
+
+    plain_text = "".join(text_parts).strip()
+    if not plain_text or len(plain_text) > 200:
+        raise ValueError("내용은 1~200자로 입력해 주세요.")
+    return QuestionDocument(
+        json_data=json.dumps(
+            {"ops": normalized_ops}, ensure_ascii=False, separators=(",", ":")
+        ),
+        plain_text=plain_text,
+        image_slots=(),
+    )
+
+
+def _validate_choice_attributes(raw_attributes: object) -> dict[str, bool]:
+    """선택지에서 사용할 인라인 서식만 허용한다."""
+    if raw_attributes is None:
+        return {}
+    if not isinstance(raw_attributes, dict):
+        raise ValueError("선택지 서식이 올바르지 않습니다.")
+    if not set(raw_attributes).issubset(ALLOWED_INLINE_ATTRIBUTES):
+        raise ValueError("선택지에 허용되지 않은 서식이 있습니다.")
+    if any(value is not True for value in raw_attributes.values()):
+        raise ValueError("선택지 서식 값이 올바르지 않습니다.")
+    return {name: True for name in raw_attributes}
+
+
 def _validate_attributes(raw_attributes: object) -> dict[str, object]:
     """문서 서식 속성을 안전한 값으로 제한한다."""
     if raw_attributes is None:

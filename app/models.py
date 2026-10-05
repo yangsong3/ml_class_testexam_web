@@ -102,6 +102,7 @@ class ChoiceModel(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(String(200), nullable=False)
+    text_document: Mapped[str | None] = mapped_column(Text)
     is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     image_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     image_path: Mapped[str | None] = mapped_column(String(255))

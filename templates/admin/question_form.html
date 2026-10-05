@@ -82,9 +82,14 @@
   <section class="question-type-fields" data-choice-fields>
     {% for index in range(4) %}
       <div class="choice-editor">
-        <div class="math-editor" data-math-editor>
-          <label>선택지 {{ index + 1 }}<input type="text" name="choice_{{ index }}" required maxlength="200" value="{{ question.choices[index] if question and index < question.choices|length else '' }}" data-math-input></label>
-          {{ math_assistant('선택지 ' ~ (index + 1)) }}
+        {% set choice_text = question.choices[index] if question and index < question.choices|length else '' %}
+        {% set choice_document = question.choice_documents[index] if question and index < question.choice_documents|length else '' %}
+        <div class="choice-rich-editor" data-choice-rich-editor data-choice-index="{{ index }}" data-document="{{ choice_document or '' }}">
+          <label>선택지 {{ index + 1 }}</label>
+          <input type="hidden" name="choice_{{ index }}" value="{{ choice_text }}" data-choice-text>
+          <input type="hidden" name="choice_document_{{ index }}" value="" data-choice-document>
+          <div data-choice-editor aria-label="선택지 {{ index + 1 }} 내용 편집기"></div>
+          <small>줄바꿈과 굵게·기울임·밑줄 서식을 사용할 수 있습니다. 최대 200자입니다.</small>
         </div>
         <label>선택지 {{ index + 1 }} 이미지
           <span class="choice-image-file-controls">
