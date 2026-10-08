@@ -12,7 +12,7 @@
   <input type="hidden" name="category" value="{{ category }}">
   {% for question in questions %}
   <fieldset class="question-card">
-    <legend><span>{{ loop.index }}</span><span class="visually-hidden">번 문제</span></legend>
+    <legend><span>{{ loop.index }}번 문제</span></legend>
     {% if question.prompt_document %}
       <div class="question-document" data-question-document data-document="{{ question.prompt_document }}"
            {% for digest in question.content_image_digests %}{% if digest %}data-image-{{ loop.index0 }}="{{ url_for('quiz.content_image', identifier=question.identifier, slot=loop.index0, v=digest) }}"{% endif %}{% endfor %}>

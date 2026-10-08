@@ -35,6 +35,13 @@ def test_quiz_submission_returns_result(tmp_path: Path) -> None:
     app = create_seeded_app(tmp_path)
     client = app.test_client()
 
+    quiz_response = client.get("/quiz?category=numpy")
+    quiz_content = quiz_response.get_data(as_text=True)
+
+    assert quiz_response.status_code == 200
+    assert "<legend><span>1번 문제</span></legend>" in quiz_content
+    assert 'class="visually-hidden">번 문제' not in quiz_content
+
     response = client.post(
         "/result",
         data={"category": "numpy", "answer_numpy-001": "1"},
