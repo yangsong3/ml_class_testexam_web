@@ -27,8 +27,10 @@ from app.services.question_document import (
     validate_question_document,
 )
 from app.services.question_repository import (
+    FILL_BLANK,
     MULTIPLE_CHOICE,
     SHORT_ANSWER,
+    FillBlankItem,
     Question,
 )
 
@@ -38,6 +40,8 @@ IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,49}$")
 CATEGORY_IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,29}$")
 QUESTIONS_PER_PAGE = 10
 CHOICE_COUNT = 4
+MAX_FILL_BLANK_ITEMS = 20
+MAX_WORD_BANK_OPTIONS = 30
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,8 @@ class QuestionFormValues:
     image_digest: str | None
     choice_image_digests: tuple[str | None, ...]
     choice_documents: tuple[str | None, ...]
+    word_bank: tuple[str, ...]
+    fill_blank_items: tuple[FillBlankItem, ...]
     prompt_document: str | None
     content_image_digests: tuple[str | None, ...]
     document_image_slots: tuple[int, ...]
@@ -286,6 +292,36 @@ def create_category() -> str | Any:
         identifier=identifier,
         name=name,
         errors=tuple(errors),
+    )
+
+
+@admin.route("/categories/<identifier>/delete", methods=("GET", "POST"))
+@admin_required
+def delete_category(identifier: str) -> str | Any:
+    """삭제 확인 후 문제가 없는 분야를 제거한다."""
+    category_repository = get_category_repository()
+    category = category_repository.find(identifier)
+    if category is None:
+        abort(404)
+
+    question_count = get_repository().category_counts()[identifier]
+    errors: tuple[str, ...] = ()
+    if request.method == "POST":
+        try:
+            category_repository.delete(identifier)
+        except KeyError:
+            abort(404)
+        except ValueError as error:
+            errors = (str(error),)
+        else:
+            flash("분야를 삭제했습니다.", "success")
+            return redirect(url_for("admin.dashboard"))
+
+    return render_template(
+        "admin/category_delete.html",
+        category=category,
+        question_count=question_count,
+        errors=errors,
     )
 
 
@@ -525,6 +561,65 @@ def choice_images_from_form(
     return tuple(images), tuple(errors)
 
 
+def fill_blank_values_from_form() -> tuple[
+    tuple[str, ...], tuple[FillBlankItem, ...], tuple[str, ...]
+]:
+    """관리 폼의 보기와 빈칸 하위 문항을 검증한다."""
+    raw_options = (
+        option.strip()
+        for option in re.split(r"[,\r\n]+", request.form.get("word_bank", ""))
+        if option.strip()
+    )
+    option_by_normalized: dict[str, str] = {}
+    for option in raw_options:
+        option_by_normalized.setdefault(option.casefold(), option)
+    word_bank = tuple(option_by_normalized.values())
+    errors: list[str] = []
+    if not word_bank or len(word_bank) > MAX_WORD_BANK_OPTIONS or any(
+        len(option) > 200 for option in word_bank
+    ):
+        errors.append("보기는 1~30개, 각 항목은 1~200자로 입력해 주세요.")
+
+    raw_item_prompts = request.form.getlist("fill_blank_prompts")
+    raw_item_answers = request.form.getlist("fill_blank_answers")
+    item_count = max(len(raw_item_prompts), len(raw_item_answers))
+    items: list[FillBlankItem] = []
+    for index in range(item_count):
+        item_prompt = (
+            raw_item_prompts[index].strip()
+            if index < len(raw_item_prompts)
+            else ""
+        )
+        item_answer = (
+            raw_item_answers[index].strip()
+            if index < len(raw_item_answers)
+            else ""
+        )
+        if not item_prompt and not item_answer:
+            continue
+        items.append(FillBlankItem(prompt=item_prompt, answer=item_answer))
+        if (
+            not item_prompt
+            or len(item_prompt) > 500
+            or item_prompt.count("_") != 1
+        ):
+            errors.append(
+                f"빈칸 문항 {index + 1}: 1~500자로 입력하고 빈칸은 _ 한 개로 표시해 주세요."
+            )
+        if not item_answer or len(item_answer) > 200:
+            errors.append(
+                f"빈칸 문항 {index + 1}: 정답은 1~200자로 입력해 주세요."
+            )
+        elif item_answer.casefold() not in option_by_normalized:
+            errors.append(
+                f"빈칸 문항 {index + 1}: 정답은 보기에 등록된 항목이어야 합니다."
+            )
+    fill_blank_items = tuple(items)
+    if not fill_blank_items or len(fill_blank_items) > MAX_FILL_BLANK_ITEMS:
+        errors.append("빈칸 문항은 1~20개 입력해 주세요.")
+    return word_bank, fill_blank_items, tuple(errors)
+
+
 def question_from_form(
     existing_image_digest: str | None = None,
     existing_choice_image_digests: tuple[str | None, ...] = (),
@@ -567,6 +662,8 @@ def question_from_form(
 
     correct_choice_indices: tuple[int, ...] = ()
     accepted_text_answers: tuple[str, ...] = ()
+    word_bank: tuple[str, ...] = ()
+    fill_blank_items: tuple[FillBlankItem, ...] = ()
     if question_type == MULTIPLE_CHOICE:
         validated_choices: list[str] = []
         choice_documents_list: list[str | None] = []
@@ -610,6 +707,13 @@ def question_from_form(
             len(answer) > 200 for answer in accepted_text_answers
         ):
             errors.append("주관식 정답을 줄마다 1~200자로 하나 이상 입력해 주세요.")
+    elif question_type == FILL_BLANK:
+        choices = ()
+        choice_documents = ()
+        word_bank, fill_blank_items, fill_blank_errors = (
+            fill_blank_values_from_form()
+        )
+        errors.extend(fill_blank_errors)
     else:
         choices = submitted_choices
         choice_documents = tuple(raw_choice_documents)
@@ -627,6 +731,8 @@ def question_from_form(
         image_digest=existing_image_digest,
         choice_image_digests=existing_choice_image_digests,
         choice_documents=choice_documents,
+        word_bank=word_bank,
+        fill_blank_items=fill_blank_items,
         prompt_document=prompt_document.json_data or existing_prompt_document,
         content_image_digests=(
             existing_content_image_digests
@@ -651,6 +757,8 @@ def question_from_form(
             image_digest=existing_image_digest,
             choice_image_digests=existing_choice_image_digests,
             choice_documents=choice_documents,
+            word_bank=word_bank,
+            fill_blank_items=fill_blank_items,
             prompt_document=prompt_document.json_data,
             additional_image_digests=tuple(
                 (existing_content_image_digests or (None,) * MAX_CONTENT_IMAGES)[1:]

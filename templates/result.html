@@ -24,8 +24,23 @@
       <img class="question-image" src="{{ url_for('quiz.question_image', identifier=result.question.identifier, v=result.question.image_digest) }}" alt="{{ loop.index }}번 문제 참고 이미지" loading="lazy">
     {% endif %}
     {% endif %}
-    <p>내 답: {{ result.submitted_answer_text }}</p>
-    <p>정답: <strong>{{ result.question.correct_answer_text }}</strong></p>
+    {% if result.question.is_fill_blank %}
+      <div class="fill-blank-result">
+        <div class="word-bank"><b>보기</b><div>{% for option in result.question.word_bank %}<span>{{ option }}</span>{% endfor %}</div></div>
+        <ol>
+          {% for item in result.question.fill_blank_items %}
+            {% set item_index = loop.index0 %}
+            <li class="{{ 'correct' if result.blank_item_results[item_index] else 'incorrect' }}">
+              <p>{{ item.prompt }}</p>
+              <small>내 답: {{ result.submitted_blank_answers[item_index] or '미응답' }} · 정답: <strong>{{ item.answer }}</strong></small>
+            </li>
+          {% endfor %}
+        </ol>
+      </div>
+    {% else %}
+      <p>내 답: {{ result.submitted_answer_text }}</p>
+      <p>정답: <strong>{{ result.question.correct_answer_text }}</strong></p>
+    {% endif %}
     <div class="explanation"><b>해설</b><br>{{ result.question.explanation }}</div>
   </article>
 {% endfor %}

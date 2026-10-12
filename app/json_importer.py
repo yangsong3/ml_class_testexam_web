@@ -7,7 +7,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Database
-from app.models import CategoryModel, ChoiceModel, QuestionModel, ShortAnswerModel
+from app.models import (
+    CategoryModel,
+    ChoiceModel,
+    FillBlankItemModel,
+    FillBlankOptionModel,
+    QuestionModel,
+    ShortAnswerModel,
+)
 from app.services.question_repository import JsonQuestionRepository
 
 
@@ -81,6 +88,18 @@ def import_json_if_empty(
             model.short_answers = [
                 ShortAnswerModel(position=index, text=answer)
                 for index, answer in enumerate(question.accepted_text_answers)
+            ]
+            model.fill_blank_options = [
+                FillBlankOptionModel(position=index, text=option)
+                for index, option in enumerate(question.word_bank)
+            ]
+            model.fill_blank_items = [
+                FillBlankItemModel(
+                    position=index,
+                    prompt=item.prompt,
+                    answer=item.answer,
+                )
+                for index, item in enumerate(question.fill_blank_items)
             ]
             session.add(model)
         session.commit()

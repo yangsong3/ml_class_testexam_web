@@ -9,6 +9,15 @@ from threading import Lock
 
 MULTIPLE_CHOICE = "multiple_choice"
 SHORT_ANSWER = "short_answer"
+FILL_BLANK = "fill_blank"
+
+
+@dataclass(frozen=True)
+class FillBlankItem:
+    """빈칸 채우기 문제의 하위 문항과 정답을 표현한다."""
+
+    prompt: str
+    answer: str
 
 
 @dataclass(frozen=True)
@@ -29,6 +38,8 @@ class Question:
     prompt_document: str | None = None
     additional_image_digests: tuple[str | None, ...] = ()
     choice_documents: tuple[str | None, ...] = ()
+    word_bank: tuple[str, ...] = ()
+    fill_blank_items: tuple[FillBlankItem, ...] = ()
 
     @property
     def content_image_digests(self) -> tuple[str | None, ...]:
@@ -41,10 +52,29 @@ class Question:
         return self.question_type == SHORT_ANSWER
 
     @property
+    def is_fill_blank(self) -> bool:
+        """빈칸 채우기 문제인지 반환한다."""
+        return self.question_type == FILL_BLANK
+
+    @property
+    def type_label(self) -> str:
+        """관리 화면에 표시할 문제 유형 이름을 반환한다."""
+        return {
+            MULTIPLE_CHOICE: "객관식",
+            SHORT_ANSWER: "주관식",
+            FILL_BLANK: "빈칸 채우기",
+        }.get(self.question_type, self.question_type)
+
+    @property
     def correct_answer_text(self) -> str:
         """화면에 표시할 정답 문자열을 반환한다."""
         if self.is_short_answer:
             return " / ".join(self.accepted_text_answers)
+        if self.is_fill_blank:
+            return " / ".join(
+                f"{index}. {item.answer}"
+                for index, item in enumerate(self.fill_blank_items, start=1)
+            )
         return ", ".join(self.choices[index] for index in self.correct_choice_indices)
 
 
@@ -56,12 +86,21 @@ class GradeResult:
     selected_choice_indices: tuple[int, ...]
     submitted_text: str | None
     is_correct: bool
+    submitted_blank_answers: tuple[str, ...] = ()
+    blank_item_results: tuple[bool, ...] = ()
 
     @property
     def submitted_answer_text(self) -> str:
         """화면에 표시할 제출 답안 문자열을 반환한다."""
         if self.question.is_short_answer:
             return self.submitted_text or "미응답"
+        if self.question.is_fill_blank:
+            return " / ".join(
+                f"{index}. {answer or '미응답'}"
+                for index, answer in enumerate(
+                    self.submitted_blank_answers, start=1
+                )
+            )
         if not self.selected_choice_indices:
             return "미응답"
         return ", ".join(
@@ -114,13 +153,15 @@ class JsonQuestionRepository:
         raw_answers = raw_question.get("answers")
         if raw_answers is None and "answer" in raw_question:
             raw_answers = [raw_question["answer"]]
-        if question_type not in {MULTIPLE_CHOICE, SHORT_ANSWER}:
+        if question_type not in {MULTIPLE_CHOICE, SHORT_ANSWER, FILL_BLANK}:
             raise RuntimeError("문제 유형이 올바르지 않습니다.")
         if not isinstance(choices, list) or not all(
             isinstance(choice, str) for choice in choices
         ):
             raise RuntimeError("선택지 데이터가 올바르지 않습니다.")
-        if not isinstance(raw_answers, list) or not raw_answers:
+        if question_type != FILL_BLANK and (
+            not isinstance(raw_answers, list) or not raw_answers
+        ):
             raise RuntimeError("정답 데이터가 올바르지 않습니다.")
 
         if question_type == MULTIPLE_CHOICE:
@@ -133,7 +174,9 @@ class JsonQuestionRepository:
                 raise RuntimeError("객관식 정답 데이터가 올바르지 않습니다.")
             correct_choice_indices = tuple(sorted(set(raw_answers)))
             accepted_text_answers: tuple[str, ...] = ()
-        else:
+            word_bank: tuple[str, ...] = ()
+            fill_blank_items: tuple[FillBlankItem, ...] = ()
+        elif question_type == SHORT_ANSWER:
             if choices:
                 raise RuntimeError("주관식 문제에는 선택지를 등록할 수 없습니다.")
             if not all(
@@ -144,6 +187,47 @@ class JsonQuestionRepository:
             accepted_text_answers = tuple(
                 dict.fromkeys(answer.strip() for answer in raw_answers)
             )
+            word_bank = ()
+            fill_blank_items = ()
+        else:
+            raw_word_bank = raw_question.get("word_bank")
+            raw_fill_blank_items = raw_question.get("fill_blank_items")
+            if choices:
+                raise RuntimeError("빈칸 채우기 문제에는 객관식 선택지를 등록할 수 없습니다.")
+            if not isinstance(raw_word_bank, list) or not all(
+                isinstance(option, str) and option.strip()
+                for option in raw_word_bank
+            ):
+                raise RuntimeError("빈칸 채우기 보기 데이터가 올바르지 않습니다.")
+            if not isinstance(raw_fill_blank_items, list) or not raw_fill_blank_items:
+                raise RuntimeError("빈칸 채우기 문항 데이터가 올바르지 않습니다.")
+            word_bank = tuple(option.strip() for option in raw_word_bank)
+            normalized_options = {option.casefold() for option in word_bank}
+            fill_blank_items_list: list[FillBlankItem] = []
+            for raw_item in raw_fill_blank_items:
+                if not isinstance(raw_item, dict):
+                    raise RuntimeError("빈칸 채우기 문항 데이터가 올바르지 않습니다.")
+                item_prompt = raw_item.get("prompt")
+                item_answer = raw_item.get("answer")
+                if not isinstance(item_prompt, str) or not isinstance(
+                    item_answer, str
+                ):
+                    raise RuntimeError("빈칸 채우기 문항 데이터가 올바르지 않습니다.")
+                item_prompt = item_prompt.strip()
+                item_answer = item_answer.strip()
+                if (
+                    not item_prompt
+                    or item_prompt.count("_") != 1
+                    or not item_answer
+                    or item_answer.casefold() not in normalized_options
+                ):
+                    raise RuntimeError("빈칸 채우기 문항 데이터가 올바르지 않습니다.")
+                fill_blank_items_list.append(
+                    FillBlankItem(item_prompt, item_answer)
+                )
+            correct_choice_indices = ()
+            accepted_text_answers = ()
+            fill_blank_items = tuple(fill_blank_items_list)
 
         return Question(
             identifier=raw_question["id"],
@@ -160,6 +244,8 @@ class JsonQuestionRepository:
             prompt_document=None,
             additional_image_digests=(),
             choice_documents=tuple(None for _ in choices),
+            word_bank=word_bank,
+            fill_blank_items=fill_blank_items,
         )
 
     def category_counts(self) -> Counter[str]:
@@ -259,7 +345,7 @@ class JsonQuestionRepository:
             answers = list(question.accepted_text_answers)
         else:
             answers = list(question.correct_choice_indices)
-        return {
+        raw_question: dict[str, object] = {
             "id": question.identifier,
             "category": question.category,
             "category_name": question.category_name,
@@ -269,6 +355,13 @@ class JsonQuestionRepository:
             "answers": answers,
             "explanation": question.explanation,
         }
+        if question.is_fill_blank:
+            raw_question["word_bank"] = list(question.word_bank)
+            raw_question["fill_blank_items"] = [
+                {"prompt": item.prompt, "answer": item.answer}
+                for item in question.fill_blank_items
+            ]
+        return raw_question
 
     @staticmethod
     def grade(
@@ -278,7 +371,33 @@ class JsonQuestionRepository:
         results: list[GradeResult] = []
         for question in questions:
             submitted_values = responses.get(f"answer_{question.identifier}", ())
-            if question.is_short_answer:
+            submitted_blank_answers: tuple[str, ...] = ()
+            blank_item_results: tuple[bool, ...] = ()
+            if question.is_fill_blank:
+                submitted_text = None
+                selected_choice_indices = ()
+                submitted_blank_answers = tuple(
+                    next(
+                        iter(
+                            responses.get(
+                                f"answer_{question.identifier}_{index}", ()
+                            )
+                        ),
+                        "",
+                    ).strip()
+                    for index in range(len(question.fill_blank_items))
+                )
+                blank_item_results = tuple(
+                    bool(submitted_answer)
+                    and submitted_answer.casefold() == item.answer.casefold()
+                    for submitted_answer, item in zip(
+                        submitted_blank_answers,
+                        question.fill_blank_items,
+                        strict=True,
+                    )
+                )
+                is_correct = bool(blank_item_results) and all(blank_item_results)
+            elif question.is_short_answer:
                 submitted_text = submitted_values[0].strip() if submitted_values else None
                 normalized_answer = submitted_text.casefold() if submitted_text else ""
                 accepted_answers = {
@@ -308,6 +427,8 @@ class JsonQuestionRepository:
                     selected_choice_indices=selected_choice_indices,
                     submitted_text=submitted_text,
                     is_correct=is_correct,
+                    submitted_blank_answers=submitted_blank_answers,
+                    blank_item_results=blank_item_results,
                 )
             )
         return tuple(results)

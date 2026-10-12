@@ -27,7 +27,7 @@
   <div class="section-heading"><h2 id="category-heading">등록된 분야</h2><span>{{ categories|length }}개</span></div>
   <div class="admin-category-list">
     {% for category in categories %}
-      <span class="admin-category-item"><b>{{ category.name }}</b><code>{{ category.id }}</code><small>{{ category.count }}문제</small></span>
+      <span class="admin-category-item"><b>{{ category.name }}</b><code>{{ category.id }}</code><small>{{ category.count }}문제</small><a class="category-delete-link" href="{{ url_for('admin.delete_category', identifier=category.id) }}">삭제</a></span>
     {% endfor %}
   </div>
 </section>
@@ -63,7 +63,7 @@
       {% if question.image_digest %}
         <img class="admin-question-image" src="{{ url_for('quiz.question_image', identifier=question.identifier, v=question.image_digest) }}" alt="문제 이미지" loading="lazy">
       {% endif %}
-      <p>{{ '주관식' if question.is_short_answer else '객관식' }} · 정답: {{ question.correct_answer_text }}</p>
+      <p>{{ question.type_label }} · 정답: {{ question.correct_answer_text }}</p>
       <div class="admin-question-actions">
         <a class="button secondary" href="{{ url_for('admin.edit_question', identifier=question.identifier) }}">수정</a>
         <a class="button danger" href="{{ url_for('admin.delete_question', identifier=question.identifier) }}">삭제</a>

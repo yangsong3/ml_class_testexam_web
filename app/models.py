@@ -36,7 +36,7 @@ class QuestionModel(Base):
     __tablename__ = "questions"
     __table_args__ = (
         CheckConstraint(
-            "question_type IN ('multiple_choice', 'short_answer')",
+            "question_type IN ('multiple_choice', 'short_answer', 'fill_blank')",
             name="ck_questions_type",
         ),
         CheckConstraint(
@@ -73,6 +73,16 @@ class QuestionModel(Base):
         back_populates="question",
         cascade="all, delete-orphan",
         order_by="ShortAnswerModel.position",
+    )
+    fill_blank_options: Mapped[list[FillBlankOptionModel]] = relationship(
+        back_populates="question",
+        cascade="all, delete-orphan",
+        order_by="FillBlankOptionModel.position",
+    )
+    fill_blank_items: Mapped[list[FillBlankItemModel]] = relationship(
+        back_populates="question",
+        cascade="all, delete-orphan",
+        order_by="FillBlankItemModel.position",
     )
     content_images: Mapped[list[QuestionContentImageModel]] = relationship(
         back_populates="question",
@@ -126,6 +136,47 @@ class ShortAnswerModel(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(String(200), nullable=False)
     question: Mapped[QuestionModel] = relationship(back_populates="short_answers")
+
+
+class FillBlankOptionModel(Base):
+    """빈칸 채우기 문제의 보기 항목을 저장한다."""
+
+    __tablename__ = "fill_blank_options"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_id", "position", name="uq_fill_blank_option_position"
+        ),
+    )
+
+    identifier: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question_id: Mapped[str] = mapped_column(
+        ForeignKey("questions.identifier", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(String(200), nullable=False)
+    question: Mapped[QuestionModel] = relationship(
+        back_populates="fill_blank_options"
+    )
+
+
+class FillBlankItemModel(Base):
+    """빈칸 채우기 문제의 하위 문항과 정답을 저장한다."""
+
+    __tablename__ = "fill_blank_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_id", "position", name="uq_fill_blank_item_position"
+        ),
+    )
+
+    identifier: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question_id: Mapped[str] = mapped_column(
+        ForeignKey("questions.identifier", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt: Mapped[str] = mapped_column(String(500), nullable=False)
+    answer: Mapped[str] = mapped_column(String(200), nullable=False)
+    question: Mapped[QuestionModel] = relationship(back_populates="fill_blank_items")
 
 
 class QuestionContentImageModel(Base):

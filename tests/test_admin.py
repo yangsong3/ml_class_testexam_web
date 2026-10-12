@@ -202,6 +202,46 @@ def test_admin_can_add_category(tmp_path: Path) -> None:
     assert stored_category.name == "딥러닝"
 
 
+def test_admin_can_delete_only_empty_category(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+
+    create_response = client.post(
+        "/admin/categories/new",
+        data={
+            "csrf_token": get_csrf_token(client),
+            "identifier": "empty-category",
+            "name": "빈 분야",
+        },
+    )
+    assert create_response.status_code == 302
+
+    confirm_response = client.get("/admin/categories/empty-category/delete")
+    confirm_content = confirm_response.get_data(as_text=True)
+    assert confirm_response.status_code == 200
+    assert "이 분야를 삭제할까요?" in confirm_content
+    assert "0문제" in confirm_content
+
+    delete_response = client.post(
+        "/admin/categories/empty-category/delete",
+        data={"csrf_token": get_csrf_token(client)},
+        follow_redirects=True,
+    )
+    assert delete_response.status_code == 200
+    assert "분야를 삭제했습니다." in delete_response.get_data(as_text=True)
+    assert app.config["CATEGORY_REPOSITORY"].find("empty-category") is None
+
+    protected_response = client.post(
+        "/admin/categories/numpy/delete",
+        data={"csrf_token": get_csrf_token(client)},
+    )
+    protected_content = protected_response.get_data(as_text=True)
+    assert protected_response.status_code == 200
+    assert "문제가 등록된 분야는 삭제할 수 없습니다." in protected_content
+    assert app.config["CATEGORY_REPOSITORY"].find("numpy") is not None
+
+
 def test_json_data_is_imported_when_database_is_empty(tmp_path: Path) -> None:
     data_path = Path(__file__).resolve().parent.parent / "data"
     question_path = tmp_path / "questions.json"
@@ -414,6 +454,142 @@ def test_short_answer_and_multiple_correct_answers(tmp_path: Path) -> None:
     assert stored_short_answer.accepted_text_answers == ("NumPy", "numpy")
     assert stored_multiple_choice is not None
     assert stored_multiple_choice.correct_choice_indices == (0, 2)
+
+
+def test_fill_blank_question_with_multiple_items(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+
+    category_response = client.post(
+        "/admin/categories/new",
+        data={
+            "csrf_token": get_csrf_token(client),
+            "identifier": "english",
+            "name": "영어",
+        },
+    )
+    assert category_response.status_code == 302
+
+    form_content = client.get("/admin/questions/new").get_data(as_text=True)
+    assert '<option value="fill_blank"' in form_content
+    assert "data-add-fill-blank-item" in form_content
+
+    create_response = client.post(
+        "/admin/questions/new",
+        data=MultiDict(
+            [
+                ("csrf_token", get_csrf_token(client)),
+                ("identifier", "english-001"),
+                ("category", "english"),
+                ("prompt", "보기에서 알맞은 단어를 골라 빈칸을 채우세요."),
+                ("question_type", "fill_blank"),
+                ("word_bank", "work, cook, go"),
+                ("fill_blank_prompts", "I _ now. Goodbye."),
+                ("fill_blank_answers", "go"),
+                ("fill_blank_prompts", "Please be quiet. I _."),
+                ("fill_blank_answers", "work"),
+                ("fill_blank_prompts", "He is in the kitchen. He _."),
+                ("fill_blank_answers", "cook"),
+                ("explanation", "문맥에 맞는 단어를 고릅니다."),
+            ]
+        ),
+    )
+    assert create_response.status_code == 302
+
+    stored_question = app.config["QUESTION_REPOSITORY"].find("english-001")
+    assert stored_question is not None
+    assert stored_question.is_fill_blank
+    assert stored_question.word_bank == ("work", "cook", "go")
+    assert tuple(item.answer for item in stored_question.fill_blank_items) == (
+        "go",
+        "work",
+        "cook",
+    )
+
+    edit_content = client.get(
+        "/admin/questions/english-001/edit"
+    ).get_data(as_text=True)
+    assert "I _ now. Goodbye." in edit_content
+    assert edit_content.count("data-fill-blank-item") >= 3
+
+    edit_response = client.post(
+        "/admin/questions/english-001/edit",
+        data=MultiDict(
+            [
+                ("csrf_token", get_csrf_token(client)),
+                ("identifier", "english-001"),
+                ("category", "english"),
+                ("prompt", "수정된 빈칸 채우기 문제"),
+                ("question_type", "fill_blank"),
+                ("word_bank", "work\ncook\ngo"),
+                ("fill_blank_prompts", "I _ now. Bye."),
+                ("fill_blank_answers", "go"),
+                ("fill_blank_prompts", "Please be quiet. I _."),
+                ("fill_blank_answers", "work"),
+                ("fill_blank_prompts", "He is in the kitchen. He _."),
+                ("fill_blank_answers", "cook"),
+                ("explanation", "수정된 해설"),
+            ]
+        ),
+    )
+    assert edit_response.status_code == 302
+    updated_question = app.config["QUESTION_REPOSITORY"].find("english-001")
+    assert updated_question is not None
+    assert updated_question.fill_blank_items[0].prompt == "I _ now. Bye."
+
+    quiz_content = client.get("/quiz?category=english").get_data(as_text=True)
+    assert "보기" in quiz_content
+    assert "work" in quiz_content
+    assert 'name="answer_english-001_0"' in quiz_content
+    assert 'name="answer_english-001_2"' in quiz_content
+
+    result_response = client.post(
+        "/result",
+        data={
+            "category": "english",
+            "answer_english-001_0": " GO ",
+            "answer_english-001_1": "work",
+            "answer_english-001_2": "cook",
+        },
+    )
+    result_content = result_response.get_data(as_text=True)
+    assert result_response.status_code == 200
+    assert "<strong>1</strong>문제를 맞혔어요." in result_content
+    assert "내 답: GO" in result_content
+
+    partial_result = client.post(
+        "/result",
+        data={
+            "category": "english",
+            "answer_english-001_0": "go",
+            "answer_english-001_1": "wrong",
+            "answer_english-001_2": "cook",
+        },
+    ).get_data(as_text=True)
+    assert "<strong>0</strong>문제를 맞혔어요." in partial_result
+
+    invalid_response = client.post(
+        "/admin/questions/new",
+        data=MultiDict(
+            [
+                ("csrf_token", get_csrf_token(client)),
+                ("identifier", "english-002"),
+                ("category", "english"),
+                ("prompt", "잘못된 빈칸 문제"),
+                ("question_type", "fill_blank"),
+                ("word_bank", "work, cook, go"),
+                ("fill_blank_prompts", "I _."),
+                ("fill_blank_answers", "sleep"),
+                ("explanation", "검증용 해설"),
+            ]
+        ),
+    )
+    assert invalid_response.status_code == 200
+    assert "정답은 보기에 등록된 항목이어야 합니다." in invalid_response.get_data(
+        as_text=True
+    )
+    assert app.config["QUESTION_REPOSITORY"].find("english-002") is None
 
 
 def test_admin_can_store_render_and_remove_question_image(tmp_path: Path) -> None:

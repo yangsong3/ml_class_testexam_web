@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from app.models import (
     CategoryModel,
     ChoiceModel,
+    FillBlankItemModel,
+    FillBlankOptionModel,
     QuestionContentImageModel,
     QuestionModel,
     ShortAnswerModel,
@@ -16,6 +18,7 @@ from app.services.category_repository import Category
 from app.services.image_processor import QuestionImage
 from app.services.image_storage import ImageReference, ImageStorage, StoredImage
 from app.services.question_repository import (
+    FillBlankItem,
     GradeResult,
     JsonQuestionRepository,
     Question,
@@ -75,6 +78,33 @@ class CategoryRepository:
                 session.rollback()
                 raise ValueError("이미 사용 중인 분야입니다.") from error
 
+    def delete(self, identifier: str) -> None:
+        """문제가 없는 분야를 삭제한다."""
+        with self._session_factory() as session:
+            model = session.get(CategoryModel, identifier)
+            if model is None:
+                raise KeyError("삭제할 분야를 찾을 수 없습니다.")
+            category_count = session.scalar(
+                select(func.count()).select_from(CategoryModel)
+            )
+            if (category_count or 0) <= 1:
+                raise ValueError("마지막 남은 분야는 삭제할 수 없습니다.")
+            has_question = session.scalar(
+                select(QuestionModel.identifier)
+                .where(QuestionModel.category_id == identifier)
+                .limit(1)
+            )
+            if has_question is not None:
+                raise ValueError(
+                    "문제가 등록된 분야는 삭제할 수 없습니다. 문제를 먼저 이동하거나 삭제해 주세요."
+                )
+            session.delete(model)
+            try:
+                session.commit()
+            except SQLAlchemyError as error:
+                session.rollback()
+                raise ValueError("분야를 삭제할 수 없습니다.") from error
+
 
 class QuestionRepository:
     """데이터베이스에서 문제를 조회하고 변경한다."""
@@ -91,6 +121,8 @@ class QuestionRepository:
             selectinload(QuestionModel.category),
             selectinload(QuestionModel.choices),
             selectinload(QuestionModel.short_answers),
+            selectinload(QuestionModel.fill_blank_options),
+            selectinload(QuestionModel.fill_blank_items),
             selectinload(QuestionModel.content_images),
         )
 
@@ -125,6 +157,11 @@ class QuestionRepository:
                 for slot in range(1, 5)
             ),
             choice_documents=tuple(choice.text_document for choice in model.choices),
+            word_bank=tuple(option.text for option in model.fill_blank_options),
+            fill_blank_items=tuple(
+                FillBlankItem(prompt=item.prompt, answer=item.answer)
+                for item in model.fill_blank_items
+            ),
         )
 
     def category_counts(self) -> Counter[str]:
@@ -421,6 +458,18 @@ class QuestionRepository:
         model.short_answers = [
             ShortAnswerModel(position=index, text=answer)
             for index, answer in enumerate(question.accepted_text_answers)
+        ]
+        model.fill_blank_options = [
+            FillBlankOptionModel(position=index, text=option)
+            for index, option in enumerate(question.word_bank)
+        ]
+        model.fill_blank_items = [
+            FillBlankItemModel(
+                position=index,
+                prompt=item.prompt,
+                answer=item.answer,
+            )
+            for index, item in enumerate(question.fill_blank_items)
         ]
         model.content_images = [
             QuestionContentImageModel(

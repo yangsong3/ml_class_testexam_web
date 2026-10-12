@@ -77,6 +77,7 @@
     <select name="question_type" required>
       <option value="multiple_choice" {% if selected_type == 'multiple_choice' %}selected{% endif %}>객관식</option>
       <option value="short_answer" {% if selected_type == 'short_answer' %}selected{% endif %}>주관식</option>
+      <option value="fill_blank" {% if selected_type == 'fill_blank' %}selected{% endif %}>빈칸 채우기</option>
     </select>
   </label>
   <section class="question-type-fields" data-choice-fields>
@@ -121,6 +122,35 @@
       <small>허용할 정답 표현을 한 줄에 하나씩 입력합니다. 채점할 때 앞뒤 공백과 영문 대소문자는 구분하지 않습니다.</small>
     </label>
   </section>
+  <section class="question-type-fields fill-blank-builder" data-fill-blank-fields {% if selected_type != 'fill_blank' %}hidden{% endif %}>
+    <label>보기
+      <textarea name="word_bank" maxlength="6000" placeholder="work, cook, go">{{ question.word_bank|join('\n') if question else '' }}</textarea>
+      <small>쉼표 또는 줄바꿈으로 구분합니다. 최대 30개이며 문항 정답은 보기에 포함되어야 합니다.</small>
+    </label>
+    <div class="fill-blank-builder-heading">
+      <div><b>빈칸 문항</b><small>문장 안의 빈칸 한 곳을 밑줄 문자 _로 표시합니다. 최대 20개입니다.</small></div>
+      <button type="button" class="button secondary" data-add-fill-blank-item>문항 추가</button>
+    </div>
+    <div class="fill-blank-item-list" data-fill-blank-items>
+      {% if question and question.fill_blank_items %}
+        {% for item in question.fill_blank_items %}
+          <div class="fill-blank-builder-item" data-fill-blank-item>
+            <span class="fill-blank-item-number" data-fill-blank-number>{{ loop.index }}</span>
+            <label>문항<input name="fill_blank_prompts" maxlength="500" value="{{ item.prompt }}" placeholder="I _ now. Goodbye."></label>
+            <label>정답<input name="fill_blank_answers" maxlength="200" value="{{ item.answer }}" placeholder="go"></label>
+            <button type="button" class="fill-blank-remove" data-remove-fill-blank-item>삭제</button>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="fill-blank-builder-item" data-fill-blank-item>
+          <span class="fill-blank-item-number" data-fill-blank-number>1</span>
+          <label>문항<input name="fill_blank_prompts" maxlength="500" value="" placeholder="I _ now. Goodbye."></label>
+          <label>정답<input name="fill_blank_answers" maxlength="200" value="" placeholder="go"></label>
+          <button type="button" class="fill-blank-remove" data-remove-fill-blank-item>삭제</button>
+        </div>
+      {% endif %}
+    </div>
+  </section>
   <div class="math-editor" data-math-editor>
     <label>해설
       <textarea name="explanation" required maxlength="1000" data-math-input>{{ question.explanation if question else '' }}</textarea>
@@ -149,6 +179,10 @@
     <div class="short-answer-field" data-preview-short-answer hidden>
       <label>주관식 답안</label>
       <input type="text" disabled placeholder="답안을 입력하는 영역입니다.">
+    </div>
+    <div class="fill-blank-question" data-preview-fill-blank hidden>
+      <div class="word-bank"><b>보기</b><div data-preview-word-bank></div></div>
+      <ol class="fill-blank-list" data-preview-fill-blank-items></ol>
     </div>
   </fieldset>
   <div class="explanation preview-explanation"><b>해설</b><div data-preview-explanation></div></div>

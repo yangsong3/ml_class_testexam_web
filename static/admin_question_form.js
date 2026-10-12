@@ -52,21 +52,113 @@ if (questionForm?.hasAttribute("data-id-recommendations")) {
   });
 }
 
+if (questionForm) {
+  const fillBlankList = questionForm.querySelector("[data-fill-blank-items]");
+  const addFillBlankButton = questionForm.querySelector(
+    "[data-add-fill-blank-item]"
+  );
+
+  if (fillBlankList && addFillBlankButton) {
+    const refreshFillBlankItems = () => {
+      const items = fillBlankList.querySelectorAll("[data-fill-blank-item]");
+      items.forEach((item, index) => {
+        item.querySelector("[data-fill-blank-number]").textContent = index + 1;
+      });
+      addFillBlankButton.disabled = items.length >= 20;
+    };
+
+    const createFillBlankItem = () => {
+      const item = document.createElement("div");
+      item.className = "fill-blank-builder-item";
+      item.dataset.fillBlankItem = "";
+
+      const number = document.createElement("span");
+      number.className = "fill-blank-item-number";
+      number.dataset.fillBlankNumber = "";
+
+      const promptLabel = document.createElement("label");
+      promptLabel.textContent = "문항";
+      const promptInput = document.createElement("input");
+      promptInput.name = "fill_blank_prompts";
+      promptInput.maxLength = 500;
+      promptInput.placeholder = "I _ now. Goodbye.";
+      promptLabel.append(promptInput);
+
+      const answerLabel = document.createElement("label");
+      answerLabel.textContent = "정답";
+      const answerInput = document.createElement("input");
+      answerInput.name = "fill_blank_answers";
+      answerInput.maxLength = 200;
+      answerInput.placeholder = "go";
+      answerLabel.append(answerInput);
+
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "fill-blank-remove";
+      removeButton.dataset.removeFillBlankItem = "";
+      removeButton.textContent = "삭제";
+      item.append(number, promptLabel, answerLabel, removeButton);
+      return item;
+    };
+
+    addFillBlankButton.addEventListener("click", () => {
+      if (fillBlankList.children.length >= 20) {
+        return;
+      }
+      const item = createFillBlankItem();
+      const isFillBlank =
+        questionForm.elements.question_type.value === "fill_blank";
+      item.querySelectorAll("input").forEach((input) => {
+        input.required = isFillBlank;
+      });
+      fillBlankList.append(item);
+      item.querySelector("input").focus();
+      refreshFillBlankItems();
+    });
+    fillBlankList.addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-remove-fill-blank-item]");
+      if (!removeButton) {
+        return;
+      }
+      const items = fillBlankList.querySelectorAll("[data-fill-blank-item]");
+      const item = removeButton.closest("[data-fill-blank-item]");
+      if (items.length === 1) {
+        item.querySelectorAll("input").forEach((input) => {
+          input.value = "";
+        });
+      } else {
+        item.remove();
+      }
+      refreshFillBlankItems();
+    });
+    refreshFillBlankItems();
+  }
+}
+
 if (questionForm?.hasAttribute("data-question-type-controls")) {
   const typeSelect = questionForm.querySelector("select[name='question_type']");
   const choiceFields = questionForm.querySelector("[data-choice-fields]");
   const shortAnswerFields = questionForm.querySelector("[data-short-answer-fields]");
+  const fillBlankFields = questionForm.querySelector("[data-fill-blank-fields]");
   const choiceInputs = choiceFields.querySelectorAll("input[name^='choice_'][type='text']");
   const textAnswers = shortAnswerFields.querySelector("textarea[name='text_answers']");
+  const wordBank = fillBlankFields.querySelector("textarea[name='word_bank']");
 
   const updateQuestionType = () => {
     const isShortAnswer = typeSelect.value === "short_answer";
-    choiceFields.hidden = isShortAnswer;
+    const isMultipleChoice = typeSelect.value === "multiple_choice";
+    const isFillBlank = typeSelect.value === "fill_blank";
+    choiceFields.hidden = !isMultipleChoice;
     shortAnswerFields.hidden = !isShortAnswer;
+    fillBlankFields.hidden = !isFillBlank;
     choiceInputs.forEach((input) => {
-      input.required = !isShortAnswer;
+      input.required = isMultipleChoice;
     });
     textAnswers.required = isShortAnswer;
+    wordBank.required = isFillBlank;
+    fillBlankFields.querySelectorAll("input").forEach((input) => {
+      input.required = isFillBlank;
+    });
   };
 
   typeSelect.addEventListener("change", updateQuestionType);
@@ -488,6 +580,15 @@ if (questionForm && questionPreview) {
   const previewShortAnswer = questionPreview.querySelector(
     "[data-preview-short-answer]"
   );
+  const previewFillBlank = questionPreview.querySelector(
+    "[data-preview-fill-blank]"
+  );
+  const previewWordBank = questionPreview.querySelector(
+    "[data-preview-word-bank]"
+  );
+  const previewFillBlankItems = questionPreview.querySelector(
+    "[data-preview-fill-blank-items]"
+  );
   const previewExplanation = questionPreview.querySelector(
     "[data-preview-explanation]"
   );
@@ -541,6 +642,7 @@ if (questionForm && questionPreview) {
     previewChoices.replaceChildren();
     previewChoices.hidden = questionType !== "multiple_choice";
     previewShortAnswer.hidden = questionType !== "short_answer";
+    previewFillBlank.hidden = questionType !== "fill_blank";
     if (questionType === "multiple_choice") {
       const correctAnswers = new Set(
         Array.from(questionForm.querySelectorAll("input[name='answers']:checked"))
@@ -584,6 +686,44 @@ if (questionForm && questionPreview) {
         }
         previewChoices.append(label);
       }
+    }
+    if (questionType === "fill_blank") {
+      previewWordBank.replaceChildren();
+      const wordBank = questionForm.elements.word_bank.value
+        .split(/[,\r\n]+/)
+        .map((option) => option.trim())
+        .filter(Boolean);
+      wordBank.forEach((option) => {
+        const optionElement = document.createElement("span");
+        optionElement.textContent = option;
+        previewWordBank.append(optionElement);
+      });
+
+      previewFillBlankItems.replaceChildren();
+      const prompts = questionForm.querySelectorAll(
+        "input[name='fill_blank_prompts']"
+      );
+      prompts.forEach((promptInput, index) => {
+        const item = document.createElement("li");
+        const label = document.createElement("label");
+        const blankIndex = promptInput.value.indexOf("_");
+        const before = document.createElement("span");
+        const after = document.createElement("span");
+        before.textContent = blankIndex >= 0
+          ? promptInput.value.slice(0, blankIndex)
+          : promptInput.value;
+        after.textContent = blankIndex >= 0
+          ? promptInput.value.slice(blankIndex + 1)
+          : "";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.disabled = true;
+        input.placeholder = "답안";
+        input.setAttribute("aria-label", `${index + 1}번 빈칸 답안`);
+        label.append(before, input, after);
+        item.append(label);
+        previewFillBlankItems.append(item);
+      });
     }
 
     previewExplanation.textContent =
