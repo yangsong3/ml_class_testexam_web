@@ -106,8 +106,9 @@ if (questionForm) {
         return;
       }
       const item = createFillBlankItem();
-      const isFillBlank =
-        questionForm.elements.question_type.value === "fill_blank";
+      const isFillBlank = questionForm.querySelector(
+        "input[name='question_type'][value='fill_blank']"
+      ).checked;
       item.querySelectorAll("input").forEach((input) => {
         input.required = isFillBlank;
       });
@@ -136,24 +137,20 @@ if (questionForm) {
 }
 
 if (questionForm?.hasAttribute("data-question-type-controls")) {
-  const typeSelect = questionForm.querySelector("select[name='question_type']");
+  const typeOptions = questionForm.querySelectorAll("input[name='question_type']");
   const choiceFields = questionForm.querySelector("[data-choice-fields]");
   const shortAnswerFields = questionForm.querySelector("[data-short-answer-fields]");
   const fillBlankFields = questionForm.querySelector("[data-fill-blank-fields]");
-  const choiceInputs = choiceFields.querySelectorAll("input[name^='choice_'][type='text']");
   const textAnswers = shortAnswerFields.querySelector("textarea[name='text_answers']");
   const wordBank = fillBlankFields.querySelector("textarea[name='word_bank']");
 
   const updateQuestionType = () => {
-    const isShortAnswer = typeSelect.value === "short_answer";
-    const isMultipleChoice = typeSelect.value === "multiple_choice";
-    const isFillBlank = typeSelect.value === "fill_blank";
+    const isShortAnswer = questionForm.querySelector("input[name='question_type'][value='short_answer']").checked;
+    const isMultipleChoice = questionForm.querySelector("input[name='question_type'][value='multiple_choice']").checked;
+    const isFillBlank = questionForm.querySelector("input[name='question_type'][value='fill_blank']").checked;
     choiceFields.hidden = !isMultipleChoice;
     shortAnswerFields.hidden = !isShortAnswer;
     fillBlankFields.hidden = !isFillBlank;
-    choiceInputs.forEach((input) => {
-      input.required = isMultipleChoice;
-    });
     textAnswers.required = isShortAnswer;
     wordBank.required = isFillBlank;
     fillBlankFields.querySelectorAll("input").forEach((input) => {
@@ -161,7 +158,12 @@ if (questionForm?.hasAttribute("data-question-type-controls")) {
     });
   };
 
-  typeSelect.addEventListener("change", updateQuestionType);
+  typeOptions.forEach((option) => option.addEventListener("change", () => {
+    if (!questionForm.querySelector("input[name='question_type']:checked")) {
+      option.checked = true;
+    }
+    updateQuestionType();
+  }));
   updateQuestionType();
 }
 
@@ -531,9 +533,8 @@ if (questionForm) {
   });
 }
 
-if (questionForm && window.Quill) {
-  questionForm.querySelectorAll("[data-choice-rich-editor]").forEach(
-    (container) => {
+const initializeChoiceEditor = (container) => {
+  if (!window.Quill) return;
       const editorElement = container.querySelector("[data-choice-editor]");
       const textInput = container.querySelector("[data-choice-text]");
       const documentInput = container.querySelector("[data-choice-document]");
@@ -563,8 +564,99 @@ if (questionForm && window.Quill) {
       choiceRichEditors.set(Number(container.dataset.choiceIndex), quill);
       questionForm.addEventListener("submit", syncChoiceEditor);
       syncChoiceEditor();
-    }
-  );
+};
+
+if (questionForm) {
+  questionForm.querySelectorAll("[data-choice-rich-editor]").forEach(initializeChoiceEditor);
+  const choiceList = questionForm.querySelector("[data-choice-editor-list]");
+  const addChoiceButton = questionForm.querySelector("[data-add-choice]");
+  const removeChoiceButton = questionForm.querySelector("[data-remove-choice]");
+  const choiceCountInput = questionForm.querySelector("[data-choice-count]");
+  const answerOptions = questionForm.querySelector("[data-choice-fields] .answer-options");
+  const refreshChoiceButton = () => {
+    addChoiceButton.disabled = choiceList.children.length >= 20;
+    removeChoiceButton.disabled = choiceList.children.length <= 2;
+  };
+  removeChoiceButton.addEventListener("click", () => {
+    if (choiceList.children.length <= 2) return;
+    const index = choiceList.children.length - 1;
+    const editor = choiceList.lastElementChild;
+    const selectedImage = editor.querySelector(`input[name='choice_image_${index}']`);
+    selectedUploadFiles.delete(selectedImage.name);
+    choiceRichEditors.delete(index);
+    editor.remove();
+    answerOptions.querySelector(`input[name='answers'][value='${index}']`).closest("label").remove();
+    choiceCountInput.value = String(index);
+    refreshChoiceButton();
+  });
+  addChoiceButton.addEventListener("click", () => {
+    const index = choiceList.children.length;
+    if (index >= 20) return;
+    const editor = document.createElement("div");
+    editor.className = "choice-editor";
+    const rich = document.createElement("div");
+    rich.className = "choice-rich-editor";
+    rich.dataset.choiceRichEditor = "";
+    rich.dataset.choiceIndex = String(index);
+    const label = document.createElement("label");
+    label.textContent = `선택지 ${index + 1}`;
+    const textInput = document.createElement("input");
+    textInput.type = "hidden";
+    textInput.name = `choice_${index}`;
+    textInput.dataset.choiceText = "";
+    const documentInput = document.createElement("input");
+    documentInput.type = "hidden";
+    documentInput.name = `choice_document_${index}`;
+    documentInput.dataset.choiceDocument = "";
+    const editorArea = document.createElement("div");
+    editorArea.dataset.choiceEditor = "";
+    editorArea.setAttribute("aria-label", `선택지 ${index + 1} 내용 편집기`);
+    const help = document.createElement("small");
+    help.textContent = "줄바꿈과 굵게·기울임·밑줄 서식을 사용할 수 있습니다. 최대 200자입니다.";
+    rich.append(label, textInput, documentInput, editorArea, help);
+    const imageLabel = document.createElement("label");
+    imageLabel.textContent = `선택지 ${index + 1} 이미지`;
+    const fileControls = document.createElement("span");
+    fileControls.className = "choice-image-file-controls";
+    const clearButton = document.createElement("button");
+    clearButton.type = "button";
+    clearButton.dataset.clearChoiceImage = String(index);
+    clearButton.textContent = "선택 취소";
+    clearButton.disabled = true;
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.name = `choice_image_${index}`;
+    fileInput.accept = "image/png,image/jpeg,image/webp";
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      if (file) selectedUploadFiles.set(fileInput.name, file);
+      else selectedUploadFiles.delete(fileInput.name);
+      clearButton.disabled = !file;
+    });
+    clearButton.addEventListener("click", () => {
+      fileInput.value = "";
+      selectedUploadFiles.delete(fileInput.name);
+      clearButton.disabled = true;
+    });
+    fileControls.append(clearButton, fileInput);
+    const imageHelp = document.createElement("small");
+    imageHelp.textContent = "선택 사항 · PNG, JPEG, WebP · 이미지당 최대 4MB";
+    imageLabel.append(fileControls, imageHelp);
+    editor.append(rich, imageLabel);
+    choiceList.append(editor);
+    const answerLabel = document.createElement("label");
+    const answerInput = document.createElement("input");
+    answerInput.type = "checkbox";
+    answerInput.name = "answers";
+    answerInput.value = String(index);
+    answerLabel.append(answerInput, ` ${index + 1}번`);
+    answerOptions.append(answerLabel);
+    choiceCountInput.value = String(index + 1);
+    initializeChoiceEditor(rich);
+    refreshChoiceButton();
+    editorArea.focus();
+  });
+  refreshChoiceButton();
 }
 
 const questionPreview = document.querySelector("[data-question-preview]");
@@ -638,12 +730,15 @@ if (questionForm && questionPreview) {
       previewDocument.textContent = questionForm.elements.prompt.value;
     }
 
-    const questionType = questionForm.elements.question_type.value;
+    const selectedTypes = new Set(Array.from(
+      questionForm.querySelectorAll("input[name='question_type']:checked"),
+      (input) => input.value
+    ));
     previewChoices.replaceChildren();
-    previewChoices.hidden = questionType !== "multiple_choice";
-    previewShortAnswer.hidden = questionType !== "short_answer";
-    previewFillBlank.hidden = questionType !== "fill_blank";
-    if (questionType === "multiple_choice") {
+    previewChoices.hidden = !selectedTypes.has("multiple_choice");
+    previewShortAnswer.hidden = !selectedTypes.has("short_answer");
+    previewFillBlank.hidden = !selectedTypes.has("fill_blank");
+    if (selectedTypes.has("multiple_choice")) {
       const correctAnswers = new Set(
         Array.from(questionForm.querySelectorAll("input[name='answers']:checked"))
           .map((input) => input.value)
@@ -655,7 +750,7 @@ if (questionForm && questionPreview) {
         hint.textContent = "복수 정답 문제입니다. 정답을 모두 선택하세요.";
         previewChoices.append(hint);
       }
-      for (let index = 0; index < 4; index += 1) {
+      for (let index = 0; index < Number(questionForm.querySelector("[data-choice-count]").value); index += 1) {
         const label = document.createElement("label");
         label.className = "choice-option";
         const line = document.createElement("div");
@@ -664,7 +759,7 @@ if (questionForm && questionPreview) {
         answerInput.type = answerType;
         answerInput.disabled = true;
         const number = document.createElement("b");
-        number.textContent = "①②③④"[index];
+        number.textContent = `${index + 1}.`;
         const choiceContent = document.createElement("div");
         choiceContent.className = "choice-document";
         const choiceEditor = choiceRichEditors.get(index);
@@ -687,7 +782,7 @@ if (questionForm && questionPreview) {
         previewChoices.append(label);
       }
     }
-    if (questionType === "fill_blank") {
+    if (selectedTypes.has("fill_blank")) {
       previewWordBank.replaceChildren();
       const wordBank = questionForm.elements.word_bank.value
         .split(/[,\r\n]+/)

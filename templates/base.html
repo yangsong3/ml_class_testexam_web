@@ -11,7 +11,9 @@
 <body>
   <header class="site-header">
     <a class="brand" href="{{ url_for('quiz.home') }}">ML MIDTERM</a>
-    <nav><a href="{{ url_for('admin.dashboard') }}">문제 관리</a></nav>
+    <nav class="site-nav" aria-label="주요 메뉴">
+      <a href="{{ url_for('admin.dashboard') }}">문제 관리</a>
+    </nav>
   </header>
   <main>{% block content %}{% endblock %}</main>
   <footer>연습 문제입니다.</footer>

@@ -5,7 +5,7 @@
   <p class="eyebrow">{{ total_count }}문제 중</p>
   <h1><strong>{{ correct_count }}</strong>문제를 맞혔어요.</h1>
   <p>틀린 문제의 해설을 읽고 다시 한 번 풀어 보세요.</p>
-  <a class="button primary" href="{{ url_for('quiz.show_quiz', category=category) }}">같은 분야 다시 풀기</a>
+  <a class="button primary" href="{{ url_for('quiz.show_quiz', category=categories) }}">같은 분야 다시 풀기</a>
   <a class="button secondary" href="{{ url_for('quiz.home') }}">다른 분야 선택</a>
 </section>
 <section class="result-list">
@@ -24,8 +24,15 @@
       <img class="question-image" src="{{ url_for('quiz.question_image', identifier=result.question.identifier, v=result.question.image_digest) }}" alt="{{ loop.index }}번 문제 참고 이미지" loading="lazy">
     {% endif %}
     {% endif %}
-    {% if result.question.is_fill_blank %}
+    {% if 'multiple_choice' in result.question.question_types %}
+      <p>객관식 {{ '정답' if result.choice_correct else '오답' }} · 내 답: {{ result.submitted_choice_text }} · 정답: <strong>{{ result.correct_choice_text }}</strong></p>
+    {% endif %}
+    {% if 'short_answer' in result.question.question_types %}
+      <p>주관식 {{ '정답' if result.short_answer_correct else '오답' }} · 내 답: {{ result.submitted_text or '미응답' }} · 정답: <strong>{{ result.question.accepted_text_answers|join(' / ') }}</strong></p>
+    {% endif %}
+    {% if 'fill_blank' in result.question.question_types %}
       <div class="fill-blank-result">
+        <p>빈칸 채우기 {{ '정답' if result.fill_blank_correct else '오답' }}</p>
         <div class="word-bank"><b>보기</b><div>{% for option in result.question.word_bank %}<span>{{ option }}</span>{% endfor %}</div></div>
         <ol>
           {% for item in result.question.fill_blank_items %}
@@ -37,9 +44,6 @@
           {% endfor %}
         </ol>
       </div>
-    {% else %}
-      <p>내 답: {{ result.submitted_answer_text }}</p>
-      <p>정답: <strong>{{ result.question.correct_answer_text }}</strong></p>
     {% endif %}
     <div class="explanation"><b>해설</b><br>{{ result.question.explanation }}</div>
   </article>

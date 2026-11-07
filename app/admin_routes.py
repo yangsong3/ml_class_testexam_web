@@ -40,6 +40,8 @@ IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,49}$")
 CATEGORY_IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,29}$")
 QUESTIONS_PER_PAGE = 10
 CHOICE_COUNT = 4
+MIN_CHOICE_COUNT = 2
+MAX_CHOICE_COUNT = 20
 MAX_FILL_BLANK_ITEMS = 20
 MAX_WORD_BANK_OPTIONS = 30
 
@@ -52,6 +54,7 @@ class QuestionFormValues:
     category: str
     prompt: str
     question_type: str
+    question_types: tuple[str, ...]
     choices: tuple[str, ...]
     correct_choice_indices: tuple[int, ...]
     accepted_text_answers: tuple[str, ...]
@@ -337,7 +340,7 @@ def create_question() -> str | Any:
         submitted_question, form_errors, form_values = question_from_form()
         content_images, image_errors = content_images_from_form()
         choice_images, choice_image_errors = choice_images_from_form(
-            form_values.question_type
+            form_values.question_type, len(form_values.choices)
         )
         errors = (*form_errors, *image_errors, *choice_image_errors)
         errors = (*errors, *document_image_errors(form_values, content_images))
@@ -396,13 +399,13 @@ def edit_question(identifier: str) -> str | Any:
         )
         content_images, image_errors = content_images_from_form()
         choice_images, choice_image_errors = choice_images_from_form(
-            form_values.question_type
+            form_values.question_type, len(form_values.choices)
         )
         remove_content_images = removed_content_image_slots_from_form()
         remove_image = 0 in remove_content_images
         remove_choice_images = frozenset(
             index
-            for index in range(CHOICE_COUNT)
+            for index in range(len(form_values.choices))
             if request.form.get(f"remove_choice_image_{index}") == "1"
         )
         errors = (*form_errors, *image_errors, *choice_image_errors)
@@ -539,16 +542,17 @@ def document_image_errors(
 
 
 def choice_images_from_form(
-    question_type: str,
+    question_type: str, choice_count: int,
 ) -> tuple[tuple[QuestionImage | None, ...], tuple[str, ...]]:
     """관리 폼의 선택지별 이미지 파일을 검증한다."""
     uploads = tuple(
-        request.files.get(f"choice_image_{index}") for index in range(CHOICE_COUNT)
+        request.files.get(f"choice_image_{index}")
+        for index in range(max(choice_count, CHOICE_COUNT))
     )
     if question_type != MULTIPLE_CHOICE:
         has_upload = any(upload is not None and upload.filename for upload in uploads)
         errors = ("선택지 이미지는 객관식 문제에만 등록할 수 있습니다.",) if has_upload else ()
-        return tuple(None for _ in range(CHOICE_COUNT)), errors
+        return tuple(None for _ in range(choice_count)), errors
 
     images: list[QuestionImage | None] = []
     errors: list[str] = []
@@ -633,17 +637,31 @@ def question_from_form(
     category = request.form.get("category", "").strip()
     prompt = request.form.get("prompt", "").strip()
     raw_prompt_document = request.form.get("prompt_document", "")
-    question_type = request.form.get("question_type", "").strip()
+    submitted_types = request.form.getlist("question_type")
+    allowed_types = (MULTIPLE_CHOICE, SHORT_ANSWER, FILL_BLANK)
+    question_types = tuple(
+        question_type for question_type in allowed_types if question_type in submitted_types
+    )
+    question_type = question_types[0] if question_types else ""
+    raw_choice_count = request.form.get("choice_count", str(CHOICE_COUNT))
+    try:
+        choice_count = int(raw_choice_count)
+    except ValueError:
+        choice_count = 0
     submitted_choices = tuple(
         request.form.get(f"choice_{index}", "").strip()
-        for index in range(CHOICE_COUNT)
+        for index in range(min(max(choice_count, 0), MAX_CHOICE_COUNT))
     )
     raw_choice_documents = tuple(
         request.form.get(f"choice_document_{index}", "")
-        for index in range(CHOICE_COUNT)
+        for index in range(len(submitted_choices))
     )
     explanation = request.form.get("explanation", "").strip()
     errors: list[str] = []
+    if not question_types or len(question_types) != len(submitted_types):
+        errors.append("올바른 문제 유형을 하나 이상 선택해 주세요.")
+    if MULTIPLE_CHOICE in question_types and not MIN_CHOICE_COUNT <= choice_count <= MAX_CHOICE_COUNT:
+        errors.append("객관식 선택지는 2~20개 입력해 주세요.")
 
     if not IDENTIFIER_PATTERN.fullmatch(identifier):
         errors.append("문제 ID는 영문 소문자, 숫자, 하이픈으로 3~50자여야 합니다.")
@@ -664,7 +682,9 @@ def question_from_form(
     accepted_text_answers: tuple[str, ...] = ()
     word_bank: tuple[str, ...] = ()
     fill_blank_items: tuple[FillBlankItem, ...] = ()
-    if question_type == MULTIPLE_CHOICE:
+    choices: tuple[str, ...] = ()
+    choice_documents: tuple[str | None, ...] = ()
+    if MULTIPLE_CHOICE in question_types:
         validated_choices: list[str] = []
         choice_documents_list: list[str | None] = []
         for index, (raw_document, fallback_text) in enumerate(
@@ -693,9 +713,7 @@ def question_from_form(
             answer not in range(len(choices)) for answer in correct_choice_indices
         ):
             errors.append("객관식 정답을 하나 이상 선택해 주세요.")
-    elif question_type == SHORT_ANSWER:
-        choices = ()
-        choice_documents = ()
+    if SHORT_ANSWER in question_types:
         accepted_text_answers = tuple(
             dict.fromkeys(
                 line.strip()
@@ -707,23 +725,18 @@ def question_from_form(
             len(answer) > 200 for answer in accepted_text_answers
         ):
             errors.append("주관식 정답을 줄마다 1~200자로 하나 이상 입력해 주세요.")
-    elif question_type == FILL_BLANK:
-        choices = ()
-        choice_documents = ()
+    if FILL_BLANK in question_types:
         word_bank, fill_blank_items, fill_blank_errors = (
             fill_blank_values_from_form()
         )
         errors.extend(fill_blank_errors)
-    else:
-        choices = submitted_choices
-        choice_documents = tuple(raw_choice_documents)
-        errors.append("올바른 문제 유형을 선택해 주세요.")
 
     form_values = QuestionFormValues(
         identifier=identifier,
         category=category,
         prompt=prompt,
         question_type=question_type,
+        question_types=question_types,
         choices=choices,
         correct_choice_indices=correct_choice_indices,
         accepted_text_answers=accepted_text_answers,

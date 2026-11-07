@@ -95,6 +95,94 @@ def png_upload() -> tuple[BytesIO, str]:
     return image_data, "formula.png"
 
 
+def test_admin_can_add_fifth_choice(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    data = question_form_data(get_csrf_token(client))
+    data.update({"choice_count": "5", "choice_4": "다섯째 선택지", "answers": "4"})
+
+    response = client.post("/admin/questions/new", data=data)
+    assert response.status_code == 302
+    question = app.config["QUESTION_REPOSITORY"].find("numpy-999")
+    assert question is not None
+    assert len(question.choices) == 5
+    assert question.correct_choice_indices == (4,)
+    assert "다섯째 선택지" in client.get("/quiz?category=numpy").get_data(as_text=True)
+    edit_content = client.get("/admin/questions/numpy-999/edit").get_data(as_text=True)
+    assert 'data-remove-choice' in edit_content
+    assert 'name="choice_count" value="5"' in edit_content
+
+
+def test_admin_can_save_and_grade_multiple_question_types(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    data = question_form_data(get_csrf_token(client))
+    data.update({
+        "identifier": "numpy-998",
+        "text_answers": "행렬",
+        "word_bank": "go, stop",
+        "fill_blank_prompts": "I _ now.",
+        "fill_blank_answers": "go",
+    })
+    form = MultiDict(data)
+    form.pop("question_type")
+    form.add("question_type", "fill_blank")
+    form.add("question_type", "short_answer")
+    form.add("question_type", "multiple_choice")
+
+    response = client.post("/admin/questions/new", data=form)
+    assert response.status_code == 302
+    question = app.config["QUESTION_REPOSITORY"].find("numpy-998")
+    assert question is not None
+    assert question.question_types == ("multiple_choice", "short_answer", "fill_blank")
+    edit_content = client.get("/admin/questions/numpy-998/edit").get_data(as_text=True)
+    for question_type in question.question_types:
+        assert f'name="question_type" value="{question_type}" checked' in edit_content
+    quiz_content = client.get("/quiz?category=numpy").get_data(as_text=True)
+    assert quiz_content.index('name="answer_numpy-998"') < quiz_content.index(
+        'name="text_answer_numpy-998"'
+    ) < quiz_content.index('name="answer_numpy-998_0"')
+
+    correct = client.post("/result", data={
+        "category": "numpy",
+        "answer_numpy-998": "2",
+        "text_answer_numpy-998": "행렬",
+        "answer_numpy-998_0": "go",
+    }).get_data(as_text=True)
+    assert "객관식 정답" in correct
+    assert "주관식 정답" in correct
+    assert "빈칸 채우기 정답" in correct
+
+    incorrect = client.post("/result", data={
+        "category": "numpy",
+        "answer_numpy-998": "2",
+        "text_answer_numpy-998": "행렬",
+        "answer_numpy-998_0": "stop",
+    }).get_data(as_text=True)
+    assert "빈칸 채우기 오답" in incorrect
+
+
+def test_admin_accepts_two_choices_after_removal(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = app.test_client()
+    login(client)
+    data = question_form_data(get_csrf_token(client))
+    data["choice_count"] = "2"
+    data["answers"] = "1"
+    data.pop("choice_2")
+    data.pop("choice_3")
+
+    assert client.post("/admin/questions/new", data=data).status_code == 302
+    question = app.config["QUESTION_REPOSITORY"].find("numpy-999")
+    assert question is not None
+    assert len(question.choices) == 2
+    assert 'name="choice_count" value="2"' in client.get(
+        "/admin/questions/numpy-999/edit"
+    ).get_data(as_text=True)
+
+
 def rich_question_document(text: str, image_slots: tuple[int, ...] = ()) -> str:
     """테스트용 서식 문제 문서를 생성한다."""
     operations: list[dict[str, object]] = [{"insert": f"{text}\n"}]
@@ -472,7 +560,7 @@ def test_fill_blank_question_with_multiple_items(tmp_path: Path) -> None:
     assert category_response.status_code == 302
 
     form_content = client.get("/admin/questions/new").get_data(as_text=True)
-    assert '<option value="fill_blank"' in form_content
+    assert 'type="checkbox" name="question_type" value="fill_blank"' in form_content
     assert "data-add-fill-blank-item" in form_content
 
     create_response = client.post(

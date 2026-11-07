@@ -4,7 +4,16 @@
   <p class="eyebrow">머신러닝/컴퓨터구조 중간고사 대비</p>
   <h1>집 가고 싶다</h1>
   <p>영어로 I want to go home</p>
-  <a class="button primary" href="{{ url_for('quiz.show_quiz', category='all') }}">전체 문제 풀기</a>
+  <form action="{{ url_for('quiz.show_quiz') }}" method="get" class="category-selection">
+    <input type="hidden" name="selection" value="1">
+    <fieldset>
+      <legend>풀어 볼 분야 선택</legend>
+      {% for item in categories if item.count > 0 %}
+        <label><input type="checkbox" name="category" value="{{ item.id }}" checked> {{ item.name }} ({{ item.count }}문제)</label>
+      {% endfor %}
+    </fieldset>
+    <button class="button primary" type="submit">선택한 분야 문제 풀기</button>
+  </form>
 </section>
 <section>
   <div class="section-heading"><h2>분야별 학습</h2><span>분야별 n문제</span></div>

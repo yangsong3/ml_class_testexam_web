@@ -1,6 +1,7 @@
 from flask import Blueprint, Response, abort, current_app, render_template, request, send_file
 
 from app.services.database_repositories import CategoryRepository, QuestionRepository
+from app.services.question_repository import Question
 
 quiz = Blueprint("quiz", __name__)
 
@@ -31,20 +32,16 @@ def home() -> str:
 def show_quiz() -> str:
     """선택한 분야의 문제를 표시한다."""
     repository = get_repository()
-    category = request.args.get("category", "all")
-    if category == "all":
-        category_name = "전체 복습"
-    else:
-        selected_category = get_category_repository().find(category)
-        if selected_category is None:
-            abort(404)
-        category_name = selected_category.name
-    questions = repository.questions_for(category)
+    categories = tuple(request.args.getlist("category"))
+    if not categories and request.args.get("selection") == "1":
+        abort(400)
+    categories = categories or ("all",)
+    questions, category_name = selected_questions(repository, categories)
     if not questions:
         abort(404)
     return render_template(
         "quiz.html",
-        category=category,
+        categories=categories,
         category_name=category_name,
         questions=questions,
     )
@@ -54,8 +51,8 @@ def show_quiz() -> str:
 def show_result() -> str:
     """제출 답안을 채점하고 해설을 표시한다."""
     repository = get_repository()
-    category = request.form.get("category", "all")
-    questions = repository.questions_for(category)
+    categories = tuple(request.form.getlist("category")) or ("all",)
+    questions, _ = selected_questions(repository, categories)
     if not questions:
         abort(404)
 
@@ -64,11 +61,29 @@ def show_result() -> str:
     correct_count = sum(result.is_correct for result in results)
     return render_template(
         "result.html",
-        category=category,
+        categories=categories,
         results=results,
         correct_count=correct_count,
         total_count=len(results),
     )
+
+
+def selected_questions(
+    repository: QuestionRepository, categories: tuple[str, ...]
+) -> tuple[tuple[Question, ...], str]:
+    """선택한 분야의 문제와 표시 이름을 반환한다."""
+    if categories == ("all",):
+        return repository.questions_for("all"), "전체 복습"
+    available = {item.identifier: item.name for item in get_category_repository().all()}
+    if "all" in categories or any(category not in available for category in categories):
+        abort(404)
+    selected = set(categories)
+    questions = tuple(
+        question for question in repository.questions_for("all")
+        if question.category in selected
+    )
+    name = ", ".join(available[category] for category in dict.fromkeys(categories))
+    return questions, name
 
 
 @quiz.get("/questions/<identifier>/image")

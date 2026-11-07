@@ -57,25 +57,44 @@ class Question:
         return self.question_type == FILL_BLANK
 
     @property
+    def question_types(self) -> tuple[str, ...]:
+        """문제에 포함된 유형을 표시 순서대로 반환한다."""
+        return tuple(
+            question_type
+            for question_type, present in (
+                (MULTIPLE_CHOICE, bool(self.choices) or self.question_type == MULTIPLE_CHOICE),
+                (SHORT_ANSWER, bool(self.accepted_text_answers) or self.question_type == SHORT_ANSWER),
+                (FILL_BLANK, bool(self.fill_blank_items) or self.question_type == FILL_BLANK),
+            )
+            if present
+        )
+
+    @property
     def type_label(self) -> str:
         """관리 화면에 표시할 문제 유형 이름을 반환한다."""
-        return {
+        labels = {
             MULTIPLE_CHOICE: "객관식",
             SHORT_ANSWER: "주관식",
             FILL_BLANK: "빈칸 채우기",
-        }.get(self.question_type, self.question_type)
+        }
+        return " · ".join(labels[question_type] for question_type in self.question_types)
 
     @property
     def correct_answer_text(self) -> str:
         """화면에 표시할 정답 문자열을 반환한다."""
-        if self.is_short_answer:
-            return " / ".join(self.accepted_text_answers)
-        if self.is_fill_blank:
-            return " / ".join(
+        parts: list[str] = []
+        if MULTIPLE_CHOICE in self.question_types:
+            parts.append("객관식: " + ", ".join(
+                self.choices[index] for index in self.correct_choice_indices
+            ))
+        if SHORT_ANSWER in self.question_types:
+            parts.append("주관식: " + " / ".join(self.accepted_text_answers))
+        if FILL_BLANK in self.question_types:
+            parts.append("빈칸 채우기: " + " / ".join(
                 f"{index}. {item.answer}"
                 for index, item in enumerate(self.fill_blank_items, start=1)
-            )
-        return ", ".join(self.choices[index] for index in self.correct_choice_indices)
+            ))
+        return " · ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -88,6 +107,9 @@ class GradeResult:
     is_correct: bool
     submitted_blank_answers: tuple[str, ...] = ()
     blank_item_results: tuple[bool, ...] = ()
+    choice_correct: bool | None = None
+    short_answer_correct: bool | None = None
+    fill_blank_correct: bool | None = None
 
     @property
     def submitted_answer_text(self) -> str:
@@ -107,6 +129,25 @@ class GradeResult:
             self.question.choices[index]
             for index in self.selected_choice_indices
             if 0 <= index < len(self.question.choices)
+        )
+
+    @property
+    def submitted_choice_text(self) -> str:
+        """제출한 객관식 답안을 반환한다."""
+        if not self.selected_choice_indices:
+            return "미응답"
+        return ", ".join(
+            self.question.choices[index]
+            for index in self.selected_choice_indices
+            if 0 <= index < len(self.question.choices)
+        )
+
+    @property
+    def correct_choice_text(self) -> str:
+        """객관식 정답을 반환한다."""
+        return ", ".join(
+            self.question.choices[index]
+            for index in self.question.correct_choice_indices
         )
 
 
@@ -370,12 +411,15 @@ class JsonQuestionRepository:
         """제출된 답안을 문제별로 채점한다."""
         results: list[GradeResult] = []
         for question in questions:
-            submitted_values = responses.get(f"answer_{question.identifier}", ())
+            question_types = question.question_types
             submitted_blank_answers: tuple[str, ...] = ()
             blank_item_results: tuple[bool, ...] = ()
-            if question.is_fill_blank:
-                submitted_text = None
-                selected_choice_indices = ()
+            choice_correct: bool | None = None
+            short_answer_correct: bool | None = None
+            fill_blank_correct: bool | None = None
+            selected_choice_indices: tuple[int, ...] = ()
+            submitted_text: str | None = None
+            if FILL_BLANK in question_types:
                 submitted_blank_answers = tuple(
                     next(
                         iter(
@@ -396,17 +440,19 @@ class JsonQuestionRepository:
                         strict=True,
                     )
                 )
-                is_correct = bool(blank_item_results) and all(blank_item_results)
-            elif question.is_short_answer:
+                fill_blank_correct = bool(blank_item_results) and all(blank_item_results)
+            if SHORT_ANSWER in question_types:
+                submitted_values = responses.get(f"text_answer_{question.identifier}", ())
+                if question_types == (SHORT_ANSWER,) and not submitted_values:
+                    submitted_values = responses.get(f"answer_{question.identifier}", ())
                 submitted_text = submitted_values[0].strip() if submitted_values else None
                 normalized_answer = submitted_text.casefold() if submitted_text else ""
                 accepted_answers = {
                     answer.casefold() for answer in question.accepted_text_answers
                 }
-                selected_choice_indices: tuple[int, ...] = ()
-                is_correct = bool(normalized_answer) and normalized_answer in accepted_answers
-            else:
-                submitted_text = None
+                short_answer_correct = bool(normalized_answer) and normalized_answer in accepted_answers
+            if MULTIPLE_CHOICE in question_types:
+                submitted_values = responses.get(f"answer_{question.identifier}", ())
                 try:
                     selected_choice_indices = tuple(
                         sorted({int(value) for value in submitted_values})
@@ -417,10 +463,14 @@ class JsonQuestionRepository:
                     index in range(len(question.choices))
                     for index in selected_choice_indices
                 )
-                is_correct = (
+                choice_correct = (
                     valid_selection
                     and selected_choice_indices == question.correct_choice_indices
                 )
+            is_correct = all(
+                result for result in (choice_correct, short_answer_correct, fill_blank_correct)
+                if result is not None
+            )
             results.append(
                 GradeResult(
                     question=question,
@@ -429,6 +479,9 @@ class JsonQuestionRepository:
                     is_correct=is_correct,
                     submitted_blank_answers=submitted_blank_answers,
                     blank_item_results=blank_item_results,
+                    choice_correct=choice_correct,
+                    short_answer_correct=short_answer_correct,
+                    fill_blank_correct=fill_blank_correct,
                 )
             )
         return tuple(results)

@@ -31,6 +31,14 @@ def test_home_displays_categories(tmp_path: Path) -> None:
     assert "머신러닝 기초" in response.get_data(as_text=True)
 
 
+def test_db_practice_page_is_removed(tmp_path: Path) -> None:
+    app = create_seeded_app(tmp_path)
+    client = app.test_client()
+
+    response = client.get("/db_practice/")
+    assert response.status_code == 404
+
+
 def test_quiz_submission_returns_result(tmp_path: Path) -> None:
     app = create_seeded_app(tmp_path)
     client = app.test_client()
@@ -49,3 +57,21 @@ def test_quiz_submission_returns_result(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "<strong>1</strong>문제를 맞혔어요." in response.get_data(as_text=True)
+
+
+def test_quiz_uses_selected_categories_for_questions_and_result(tmp_path: Path) -> None:
+    app = create_seeded_app(tmp_path)
+    client = app.test_client()
+    repository = app.config["QUESTION_REPOSITORY"]
+    selected = ("numpy", "pandas")
+    expected_count = sum(repository.category_counts()[category] for category in selected)
+
+    response = client.get("/quiz?category=numpy&category=pandas")
+    assert response.status_code == 200
+    assert f"<h1>{expected_count}문제 풀이</h1>" in response.get_data(as_text=True)
+
+    result = client.post("/result", data={"category": list(selected)})
+    assert result.status_code == 200
+    assert f"{expected_count}문제 중" in result.get_data(as_text=True)
+    assert "category=numpy&amp;category=pandas" in result.get_data(as_text=True)
+    assert client.get("/quiz?selection=1").status_code == 400
